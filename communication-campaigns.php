@@ -143,15 +143,55 @@ if (isset($_GET['action'])) {
 
     header('Content-Type: application/json');
 
-    // 1. Fetch Template Metadata Details
+    // 1. Fetch Template Metadata Details (Phase 8 & 10)
     if ($action === 'ajax_get_template') {
-        $name = $_GET['template_name'] ?? '';
-        $stmt = $pdo->prepare("SELECT * FROM communication_templates WHERE template_name = ? AND status='approved' LIMIT 1");
-        $stmt->execute([$name]);
-        $tpl = $stmt->fetch();
-        if ($tpl) {
-            $meta = json_decode($tpl['meta_data'], true) ?: [];
-            echo json_encode(['success' => true, 'template' => $tpl, 'meta' => $meta]);
+        require_once 'includes/communication/WhatsAppAccountResolver.php';
+        $resolver = WhatsAppAccountResolver::getInstance($pdo);
+
+        $templateId = !empty($_GET['template_id']) ? (int)$_GET['template_id'] : (!empty($_POST['template_id']) ? (int)$_POST['template_id'] : 0);
+        $senderAccountId = !empty($_GET['sender_account_id']) ? (int)$_GET['sender_account_id'] : (!empty($_POST['sender_account_id']) ? (int)$_POST['sender_account_id'] : 0);
+        $name = trim($_GET['template_name'] ?? $_POST['template_name'] ?? '');
+
+        $tpl = null;
+        if ($templateId > 0) {
+            $tpl = $resolver->getTemplateById($templateId, $senderAccountId ?: null);
+            if (!$tpl && $senderAccountId > 0) {
+                echo json_encode(['success' => false, 'message' => 'Template does not belong to the selected sender account.']);
+                exit;
+            }
+        } elseif (!empty($name)) {
+            $tpl = $resolver->resolveTemplate($name, $senderAccountId ?: null);
+        }
+
+        if ($tpl && ($tpl['status'] ?? '') === 'approved') {
+            $meta = json_decode($tpl['meta_data'] ?? '{}', true) ?: [];
+            $sId = (int)($tpl['sender_account_id'] ?? 3);
+            $account = $resolver->getAccount($sId) ?: $resolver->getAccount(3);
+            
+            $components = $meta['components'] ?? [];
+            $bodyPreview = $meta['body_text'] ?? '';
+            if (empty($bodyPreview) && !empty($components)) {
+                foreach ($components as $c) {
+                    if (($c['type'] ?? '') === 'BODY') {
+                        $bodyPreview = $c['text'] ?? '';
+                        break;
+                    }
+                }
+            }
+
+            echo json_encode([
+                'success' => true,
+                'template' => $tpl,
+                'meta' => $meta,
+                'sender_account' => [
+                    'id' => (int)$account['id'],
+                    'sender_key' => $account['sender_key'],
+                    'display_name' => $account['display_name'],
+                    'phone_number' => $account['phone_number'],
+                    'waba_id' => $account['waba_id'],
+                ],
+                'body_preview' => $bodyPreview,
+            ]);
         } else {
             echo json_encode(['success' => false, 'message' => 'Template not found or not approved.']);
         }
@@ -623,7 +663,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $resolver = WhatsAppAccountResolver::getInstance($pdo);
         $senderAcc = $senderAccountId ? $resolver->getAccount($senderAccountId) : $resolver->getAccount($senderKey);
         if (!$senderAcc) {
-            $senderAcc = $resolver->getAccount('notifications');
+            $senderAcc = $resolver->getAccount('notifications') ?: $resolver->getAccount(3);
         }
 
         if (empty($error_message)) {
@@ -633,18 +673,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $error_message = ($senderAcc['display_name'] ?? 'Selected sender') . ' is not configured for WhatsApp sending (missing Phone Number ID). Campaign creation aborted. The system will never silently fall back to admissions.';
             } elseif (!$campaignName) {
                 $error_message = 'Please specify a campaign name.';
-            } elseif (!$templateName) {
+            } elseif (!$templateName && empty($_POST['template_id'])) {
                 $error_message = 'Please select a Meta Marketing Template for the WhatsApp campaign.';
             } else {
-                // 2. Fetch and Validate Template
-                $stmtTpl = $pdo->prepare("SELECT * FROM communication_templates WHERE template_name = ? AND status='approved' LIMIT 1");
-                $stmtTpl->execute([$templateName]);
-                $template = $stmtTpl->fetch();
+                // 2. Fetch and Validate Template (Sender-aware & ID-based)
+                $templateId = !empty($_POST['template_id']) ? (int)$_POST['template_id'] : 0;
+                $template = null;
+                if ($templateId > 0) {
+                    $template = $resolver->getTemplateById($templateId, (int)$senderAcc['id']);
+                    if (!$template) {
+                        $error_message = 'Selected template does not belong to the selected sender account (' . htmlspecialchars($senderAcc['display_name']) . ') or is missing.';
+                    }
+                } else {
+                    $template = $resolver->resolveTemplate($templateName, (int)$senderAcc['id']);
+                }
 
-                if (!$template) {
-                    $error_message = 'Selected template is missing or not approved.';
-                } elseif (strtoupper($template['category'] ?? '') !== 'MARKETING') {
-                    $error_message = 'Only approved WhatsApp MARKETING templates can be used for bulk marketing campaigns.';
+                if (!$template && empty($error_message)) {
+                    $error_message = 'Selected template is missing or not found for ' . htmlspecialchars($senderAcc['display_name']) . '.';
+                } elseif ($template && ($template['status'] ?? '') !== 'approved') {
+                    $error_message = 'Selected template is not approved on Meta WABA.';
+                } elseif ($template && strtoupper($template['category'] ?? '') !== 'MARKETING') {
+                    $error_message = 'Only approved WhatsApp MARKETING templates can be used for bulk marketing campaigns. Utility templates cannot be broadcast.';
+                } elseif ($template && !empty($template['waba_id']) && !empty($senderAcc['waba_id']) && $template['waba_id'] !== $senderAcc['waba_id']) {
+                    $error_message = 'Template WABA (' . $template['waba_id'] . ') does not match the sender account WABA (' . $senderAcc['waba_id'] . ').';
                 } else {
                     $meta = json_decode($template['meta_data'], true) ?: [];
                     $varMappings = $_POST['vars'] ?? [];
@@ -780,18 +831,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                             $campaignStatus = 'scheduled';
                         }
 
-                        // Check if sender_account_id column exists on communication_campaigns (dual-compatibility)
+                        // Check if sender_account_id and template_id columns exist on communication_campaigns (dual-compatibility)
                         $hasCampSenderCol = false;
+                        $hasCampTemplateIdCol = false;
                         try {
                             $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
                             if ($driver === 'sqlite') {
                                 $colStmt = $pdo->query("PRAGMA table_info(communication_campaigns)");
                                 while ($cRow = $colStmt->fetch(PDO::FETCH_ASSOC)) {
-                                    if ($cRow['name'] === 'sender_account_id') { $hasCampSenderCol = true; break; }
+                                    if ($cRow['name'] === 'sender_account_id') { $hasCampSenderCol = true; }
+                                    if ($cRow['name'] === 'template_id') { $hasCampTemplateIdCol = true; }
                                 }
                             } else {
                                 $colStmt = $pdo->query("SHOW COLUMNS FROM communication_campaigns LIKE 'sender_account_id'");
                                 $hasCampSenderCol = (bool)$colStmt->fetchColumn();
+                                $colStmt2 = $pdo->query("SHOW COLUMNS FROM communication_campaigns LIKE 'template_id'");
+                                $hasCampTemplateIdCol = (bool)$colStmt2->fetchColumn();
                             }
                         } catch (Throwable $e) {}
 
@@ -810,9 +865,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                             }
                         } catch (Throwable $e) {}
 
+                        $chosenTemplateId = !empty($template['id']) ? (int)$template['id'] : null;
+                        $actualTemplateName = !empty($template['template_name']) ? $template['template_name'] : $templateName;
+
+                        $segmentCriteria['template_id'] = $chosenTemplateId;
+                        $segmentCriteria['sender_account_id'] = (int)$senderAcc['id'];
+                        $segmentCriteria['waba_id'] = $senderAcc['waba_id'] ?? '';
+
                         $pdo->beginTransaction();
                         try {
-                            if ($hasCampSenderCol) {
+                            if ($hasCampSenderCol && $hasCampTemplateIdCol) {
+                                $stmtCamp = $pdo->prepare("
+                                    INSERT INTO communication_campaigns (name, channel, target_audience, template_id, template_name, segment_criteria, status, scheduled_at, sender_account_id, created_by, created_at, updated_at)
+                                    VALUES (?, 'whatsapp', ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+                                ");
+                                $stmtCamp->execute([
+                                    $campaignName,
+                                    $targetAudience,
+                                    $chosenTemplateId,
+                                    $actualTemplateName,
+                                    json_encode($segmentCriteria),
+                                    $campaignStatus,
+                                    $scheduledAtVal,
+                                    (int)$senderAcc['id'],
+                                    $admin_username
+                                ]);
+                            } elseif ($hasCampSenderCol) {
                                 $stmtCamp = $pdo->prepare("
                                     INSERT INTO communication_campaigns (name, channel, target_audience, template_name, segment_criteria, status, scheduled_at, sender_account_id, created_by, created_at, updated_at)
                                     VALUES (?, 'whatsapp', ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
@@ -820,7 +898,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                                 $stmtCamp->execute([
                                     $campaignName,
                                     $targetAudience,
-                                    $templateName,
+                                    $actualTemplateName,
                                     json_encode($segmentCriteria),
                                     $campaignStatus,
                                     $scheduledAtVal,
@@ -835,7 +913,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                                 $stmtCamp->execute([
                                     $campaignName,
                                     $targetAudience,
-                                    $templateName,
+                                    $actualTemplateName,
                                     json_encode($segmentCriteria),
                                     $campaignStatus,
                                     $scheduledAtVal,
@@ -920,26 +998,11 @@ try {
     ")->fetchAll();
 } catch (Exception $ex) {}
 
-$marketingTemplates = [];
-try {
-    $marketingTemplates = $pdo->query("
-        SELECT * FROM communication_templates 
-        WHERE channel='whatsapp' AND status='approved' AND category='MARKETING'
-        ORDER BY template_name ASC
-    ")->fetchAll();
-} catch (Exception $ex) {}
-
-// Query courses available for dropdown segments
-$leadCourses = [];
-try {
-    $leadCourses = $pdo->query("SELECT DISTINCT interested_course FROM leads WHERE interested_course IS NOT NULL AND interested_course <> '' ORDER BY interested_course ASC")->fetchAll(PDO::FETCH_COLUMN);
-} catch (Exception $ex) {}
-
 // Sender Accounts Resolution for UI
 $resolver = WhatsAppAccountResolver::getInstance($pdo);
 $allAccounts = $resolver->getAllAccounts(false);
-$notifAccount = $resolver->getAccount('notifications') ?: [
-    'id' => 2,
+$notifAccount = $resolver->getAccount('notifications') ?: $resolver->getAccount(3) ?: [
+    'id' => 3,
     'sender_key' => 'notifications',
     'display_name' => 'PEPP Updates',
     'display_number' => '917994304400',
@@ -947,7 +1010,7 @@ $notifAccount = $resolver->getAccount('notifications') ?: [
     'purpose' => 'Session reminders, daily tasks & marketing campaigns',
     'status' => 'active'
 ];
-$admissionsAccount = $resolver->getAccount('admissions') ?: [
+$admissionsAccount = $resolver->getAccount('admissions') ?: $resolver->getAccount(1) ?: [
     'id' => 1,
     'sender_key' => 'admissions',
     'display_name' => 'PEPP Learning',
@@ -956,6 +1019,26 @@ $admissionsAccount = $resolver->getAccount('admissions') ?: [
     'purpose' => 'Admissions communication & student records',
     'status' => 'active'
 ];
+$leadCourses = [];
+try {
+    $leadCourses = $pdo->query("SELECT DISTINCT interested_course FROM leads WHERE interested_course IS NOT NULL AND interested_course <> '' ORDER BY interested_course ASC")->fetchAll(PDO::FETCH_COLUMN);
+} catch (Exception $ex) {}
+
+$allApprovedTemplates = [];
+try {
+    $rawApproved = $pdo->query("
+        SELECT * FROM communication_templates 
+        WHERE channel='whatsapp' AND status='approved'
+        ORDER BY template_name ASC
+    ")->fetchAll();
+    foreach ($rawApproved as $rTpl) {
+        $allApprovedTemplates[] = $resolver->normalizeTemplateRow($rTpl);
+    }
+} catch (Exception $ex) {}
+
+$marketingTemplates = array_values(array_filter($allApprovedTemplates, function($t) {
+    return strtoupper($t['category'] ?? '') === 'MARKETING';
+}));
 $isNotifConfigured = !empty($notifAccount['phone_number_id']);
 $isNotifActive = (!isset($notifAccount['status']) || $notifAccount['status'] === 'active');
 $isAdmissionsConfigured = !empty($admissionsAccount['phone_number_id']);
@@ -1343,36 +1426,97 @@ include 'includes/admin_nav.php';
                     <input type="hidden" name="action" value="create_campaign">
                     <input type="hidden" name="target_audience" id="inp-target-audience" value="leads">
                     <input type="hidden" name="selected_student_id" id="inp-selected-student-id" value="">
-                    <input type="hidden" name="sender_account_id" id="inp-sender-account-id" value="<?php echo htmlspecialchars((string)($notifAccount['id'] ?? '2')); ?>">
+                    <input type="hidden" name="sender_account_id" id="inp-sender-account-id" value="<?php echo htmlspecialchars((string)($notifAccount['id'] ?? '3')); ?>">
                     <input type="hidden" name="sender_key" id="inp-sender-key" value="<?php echo htmlspecialchars((string)($notifAccount['sender_key'] ?? 'notifications')); ?>">
+                    <input type="hidden" name="template_id" id="inp-template-id" value="">
 
-                    <!-- STEP 1 — TEMPLATE -->
+                    <!-- STEP 1 — SENDER ACCOUNT (PHASE 9) -->
                     <div class="form-step-section">
                         <div class="form-step-header">
                             <div class="form-step-number">01</div>
                             <div style="display:flex; flex-direction:column; gap:2px;">
+                                <div class="form-step-title">Select WhatsApp Sender</div>
+                                <div style="font-size:0.7rem; color:#64748b; font-weight:500;">Authoritative WABA routing context</div>
+                            </div>
+                        </div>
+
+                        <div style="display:flex; flex-direction:column; gap:10px;">
+                            <!-- PEPP Updates Card (Default) -->
+                            <label class="sender-card-option" id="sender-card-notifications" style="display:block; border:1.5px solid <?php echo $isNotifConfigured ? '#7c3aed' : '#fca5a5'; ?>; border-radius:10px; padding:10px 12px; background:<?php echo $isNotifConfigured ? '#f5f3ff' : '#fef2f2'; ?>; cursor:pointer;">
+                                <div style="display:flex; align-items:flex-start; gap:10px;">
+                                    <input type="radio" name="selected_sender" value="notifications" <?php echo $isNotifConfigured ? 'checked' : 'disabled'; ?> onchange="onSenderSelected('notifications', <?php echo (int)($notifAccount['id'] ?? 3); ?>, 'PEPP Updates', <?php echo $isNotifConfigured ? 'true' : 'false'; ?>)" style="margin-top:2px; accent-color:#7c3aed;">
+                                    <div style="flex:1;">
+                                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                                            <strong style="color:#1e293b; font-size:0.83rem;"><?php echo htmlspecialchars($notifAccount['display_name'] ?? 'PEPP Updates'); ?></strong>
+                                            <span class="badge <?php echo $isNotifConfigured ? 'blue' : 'red'; ?>" style="font-size:0.62rem;">
+                                                <?php echo $isNotifConfigured ? 'Default (Updates &amp; Reminders)' : 'Not Configured'; ?>
+                                            </span>
+                                        </div>
+                                        <div style="font-size:0.75rem; color:#475569; margin-top:2px;">
+                                            <i class="fab fa-whatsapp" style="color:#25d366;"></i> +91 79943 04400
+                                            &nbsp;&bull;&nbsp; WABA: <code style="font-size:0.7rem; font-weight:700; background:#f1f5f9; padding:1px 4px; border-radius:3px;">1099020233033644</code>
+                                        </div>
+                                        <div style="font-size:0.67rem; color:#64748b; margin-top:2px;">
+                                            Purpose: Marketing campaigns &amp; reminders
+                                        </div>
+                                    </div>
+                                </div>
+                                <?php if (!$isNotifConfigured): ?>
+                                    <div style="margin-top:8px; font-size:0.72rem; color:#b91c1c; background:#fee2e2; border-radius:6px; padding:6px 10px;">
+                                        <i class="fas fa-triangle-exclamation"></i> <strong>PEPP Updates is not configured for WhatsApp sending.</strong><br>
+                                        Meta Phone Number ID is missing. Sending via this account is disabled and will <em>never</em> silently fall back to admissions.
+                                    </div>
+                                <?php endif; ?>
+                            </label>
+
+                            <!-- PEPP Learning Card (Admissions) -->
+                            <label class="sender-card-option" id="sender-card-admissions" style="display:block; border:1.5px solid #cbd5e1; border-radius:10px; padding:10px 12px; background:#fff; cursor:pointer;">
+                                <div style="display:flex; align-items:flex-start; gap:10px;">
+                                    <input type="radio" name="selected_sender" value="admissions" <?php echo ($isAdmissionsConfigured && !$isNotifConfigured) ? 'checked' : ''; ?> <?php echo $isAdmissionsConfigured ? '' : 'disabled'; ?> onchange="onSenderSelected('admissions', <?php echo (int)($admissionsAccount['id'] ?? 1); ?>, 'PEPP Learning', <?php echo $isAdmissionsConfigured ? 'true' : 'false'; ?>)" style="margin-top:2px; accent-color:#7c3aed;">
+                                    <div style="flex:1;">
+                                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                                            <strong style="color:#1e293b; font-size:0.83rem;"><?php echo htmlspecialchars($admissionsAccount['display_name'] ?? 'PEPP Learning'); ?></strong>
+                                            <span class="badge <?php echo $isAdmissionsConfigured ? 'gray' : 'red'; ?>" style="font-size:0.62rem;">
+                                                <?php echo $isAdmissionsConfigured ? 'Admissions Sender' : 'Not Configured'; ?>
+                                            </span>
+                                        </div>
+                                        <div style="font-size:0.75rem; color:#475569; margin-top:2px;">
+                                            <i class="fab fa-whatsapp" style="color:#25d366;"></i> +91 62825 63209
+                                            &nbsp;&bull;&nbsp; WABA: <code style="font-size:0.7rem; font-weight:700; background:#f1f5f9; padding:1px 4px; border-radius:3px;">1410328164305566</code>
+                                        </div>
+                                        <div style="font-size:0.67rem; color:#64748b; margin-top:2px;">
+                                            Purpose: Admissions communication &amp; student records
+                                        </div>
+                                    </div>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- STEP 2 — TEMPLATE (PHASE 9 & 11) -->
+                    <div class="form-step-section">
+                        <div class="form-step-header">
+                            <div class="form-step-number">02</div>
+                            <div style="display:flex; flex-direction:column; gap:2px;">
                                 <div class="form-step-title">Select Marketing Template</div>
-                                <div style="font-size:0.7rem; color:#64748b; font-weight:500;">Approved WhatsApp marketing templates</div>
+                                <div style="font-size:0.7rem; color:#64748b; font-weight:500;">Approved templates scoped to selected sender</div>
                             </div>
                         </div>
 
                         <div style="margin-bottom:10px;">
                             <label style="display:block; font-size:0.78rem; font-weight:700; color:#4b5563; margin-bottom:6px;">Approved Template <span style="color:#ef4444;">*</span></label>
-                            <select name="template_name" id="sel-template-name" class="form-control" onchange="onTemplateSelected(this.value)" required>
+                            <select name="template_name" id="sel-template-name" class="form-control" onchange="onTemplateSelected(this.value, this.options[this.selectedIndex] ? this.options[this.selectedIndex].getAttribute('data-id') : '')" required>
                                 <option value="">-- Choose Approved Marketing Template --</option>
-                                <?php foreach ($marketingTemplates as $m_tpl): ?>
-                                    <option value="<?php echo htmlspecialchars($m_tpl['template_name']); ?>" data-lang="<?php echo htmlspecialchars($m_tpl['language']); ?>">
-                                        <?php echo htmlspecialchars($m_tpl['template_name']); ?> (<?php echo htmlspecialchars($m_tpl['language']); ?>)
-                                    </option>
-                                <?php endforeach; ?>
                             </select>
+                            <div id="sender-templates-notice" style="display:none; font-size:0.74rem; color:#475569; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px; margin-top:8px;"></div>
                         </div>
 
                         <!-- Template Preview Card -->
                         <div id="tpl-info-card" style="display:none; border:1px solid #cbd5e1; border-radius:10px; padding:10px; background:#f8fafc; font-size:0.75rem;">
-                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; flex-wrap:wrap; gap:4px;">
                                 <strong id="tpl-card-name" style="color:#1e293b; font-size:0.8rem;">-</strong>
-                                <div style="display:flex; gap:4px;">
+                                <div style="display:flex; gap:4px; align-items:center;">
+                                    <span class="badge" id="tpl-card-sender-badge" style="background:#e0e7ff; color:#3730a3; font-size:0.6rem; font-weight:700;">PEPP Updates</span>
                                     <span class="badge blue" style="font-size:0.6rem;">MARKETING</span>
                                     <span class="badge gray" id="tpl-card-lang" style="font-size:0.6rem;">en</span>
                                 </div>
@@ -1381,10 +1525,10 @@ include 'includes/admin_nav.php';
                         </div>
                     </div>
 
-                    <!-- STEP 2 — AUDIENCE -->
+                    <!-- STEP 3 — AUDIENCE -->
                     <div class="form-step-section">
                         <div class="form-step-header">
-                            <div class="form-step-number">02</div>
+                            <div class="form-step-number">03</div>
                             <div style="display:flex; flex-direction:column; gap:2px;">
                                 <div class="form-step-title">Target Audience</div>
                                 <div style="font-size:0.7rem; color:#64748b; font-weight:500;" id="txt-audience-subtitle">Segment leads database</div>
@@ -1436,7 +1580,7 @@ include 'includes/admin_nav.php';
                                 <label style="display:block; font-size:0.75rem; font-weight:700; color:#4b5563; margin-bottom:6px;">
                                     Search Student <span style="color:#ef4444;">*</span>
                                     <span style="font-weight:400; color:#64748b; font-size:0.7rem; margin-left:4px;">(Name, Phone, or Admission No)</span>
-                                </label>
+                                </div>
                                 <div style="position:relative;">
                                     <i class="fas fa-search" style="position:absolute; left:10px; top:11px; color:#94a3b8; font-size:0.8rem;"></i>
                                     <input type="text" id="inp-student-search" class="form-control" placeholder="Search by name, phone, or admission no..." style="padding-left:32px !important; font-size:0.8rem; border-radius:8px;" oninput="onStudentSearchInput(this.value)" autocomplete="off">
@@ -1493,67 +1637,6 @@ include 'includes/admin_nav.php';
                         <button type="button" onclick="calculatePreview()" class="btn btn-outline" style="width:100%; border-radius:8px; font-weight:700; padding:8px; font-size:0.78rem; display:flex; align-items:center; justify-content:center; gap:6px;">
                             <i class="fas fa-calculator"></i> Calculate &amp; Preview Recipients
                         </button>
-                    </div>
-
-                    <!-- STEP 3 — SENDER -->
-                    <div class="form-step-section">
-                        <div class="form-step-header">
-                            <div class="form-step-number">03</div>
-                            <div style="display:flex; flex-direction:column; gap:2px;">
-                                <div class="form-step-title">Sender Account</div>
-                                <div style="font-size:0.7rem; color:#64748b; font-weight:500;">Multi-number WhatsApp routing</div>
-                            </div>
-                        </div>
-
-                        <div style="display:flex; flex-direction:column; gap:10px;">
-                            <!-- PEPP Updates Card (Default) -->
-                            <label class="sender-card-option" id="sender-card-notifications" style="display:block; border:1.5px solid <?php echo $isNotifConfigured ? '#7c3aed' : '#fca5a5'; ?>; border-radius:10px; padding:10px 12px; background:<?php echo $isNotifConfigured ? '#f5f3ff' : '#fef2f2'; ?>; cursor:pointer;">
-                                <div style="display:flex; align-items:flex-start; gap:10px;">
-                                    <input type="radio" name="selected_sender" value="notifications" <?php echo $isNotifConfigured ? 'checked' : 'disabled'; ?> onchange="onSenderSelected('notifications', <?php echo (int)($notifAccount['id'] ?? 2); ?>, 'PEPP Updates', <?php echo $isNotifConfigured ? 'true' : 'false'; ?>)" style="margin-top:2px; accent-color:#7c3aed;">
-                                    <div style="flex:1;">
-                                        <div style="display:flex; justify-content:space-between; align-items:center;">
-                                            <strong style="color:#1e293b; font-size:0.83rem;"><?php echo htmlspecialchars($notifAccount['display_name'] ?? 'PEPP Updates'); ?></strong>
-                                            <span class="badge <?php echo $isNotifConfigured ? 'blue' : 'red'; ?>" style="font-size:0.62rem;">
-                                                <?php echo $isNotifConfigured ? 'Default (Marketing)' : 'Not Configured'; ?>
-                                            </span>
-                                        </div>
-                                        <div style="font-size:0.75rem; color:#475569; margin-top:2px;">
-                                            <i class="fab fa-whatsapp" style="color:#25d366;"></i> +91 79943 04400
-                                        </div>
-                                        <div style="font-size:0.67rem; color:#64748b; margin-top:2px;">
-                                            Purpose: Marketing campaigns &amp; reminders
-                                        </div>
-                                    </div>
-                                </div>
-                                <?php if (!$isNotifConfigured): ?>
-                                    <div style="margin-top:8px; font-size:0.72rem; color:#b91c1c; background:#fee2e2; border-radius:6px; padding:6px 10px;">
-                                        <i class="fas fa-triangle-exclamation"></i> <strong>PEPP Updates is not configured for WhatsApp sending.</strong><br>
-                                        Meta Phone Number ID is missing. Sending via this account is disabled and will <em>never</em> silently fall back to admissions.
-                                    </div>
-                                <?php endif; ?>
-                            </label>
-
-                            <!-- PEPP Learning Card (Admissions) -->
-                            <label class="sender-card-option" id="sender-card-admissions" style="display:block; border:1.5px solid #cbd5e1; border-radius:10px; padding:10px 12px; background:#fff; cursor:pointer;">
-                                <div style="display:flex; align-items:flex-start; gap:10px;">
-                                    <input type="radio" name="selected_sender" value="admissions" <?php echo ($isAdmissionsConfigured && !$isNotifConfigured) ? 'checked' : ''; ?> <?php echo $isAdmissionsConfigured ? '' : 'disabled'; ?> onchange="onSenderSelected('admissions', <?php echo (int)($admissionsAccount['id'] ?? 1); ?>, 'PEPP Learning', <?php echo $isAdmissionsConfigured ? 'true' : 'false'; ?>)" style="margin-top:2px; accent-color:#7c3aed;">
-                                    <div style="flex:1;">
-                                        <div style="display:flex; justify-content:space-between; align-items:center;">
-                                            <strong style="color:#1e293b; font-size:0.83rem;"><?php echo htmlspecialchars($admissionsAccount['display_name'] ?? 'PEPP Learning'); ?></strong>
-                                            <span class="badge <?php echo $isAdmissionsConfigured ? 'gray' : 'red'; ?>" style="font-size:0.62rem;">
-                                                <?php echo $isAdmissionsConfigured ? 'Admissions Sender' : 'Not Configured'; ?>
-                                            </span>
-                                        </div>
-                                        <div style="font-size:0.75rem; color:#475569; margin-top:2px;">
-                                            <i class="fab fa-whatsapp" style="color:#25d366;"></i> +91 62825 63209
-                                        </div>
-                                        <div style="font-size:0.67rem; color:#64748b; margin-top:2px;">
-                                            Purpose: Admissions communication &amp; student records
-                                        </div>
-                                    </div>
-                                </div>
-                            </label>
-                        </div>
                     </div>
 
                     <!-- STEP 4 — REVIEW & SEND -->
@@ -2170,25 +2253,76 @@ function resetStudentPreviewChips() {
     if (previewPanel) previewPanel.style.display = 'none';
 }
 
-// Initialize switcher on page load if query parameter specifies leads target
+const allTemplatesData = <?php echo json_encode($allApprovedTemplates); ?>;
+
+// Initialize switcher and template dropdown on page load
 window.addEventListener('DOMContentLoaded', () => {
+    const initialSenderId = parseInt(document.getElementById('inp-sender-account-id').value || 3, 10);
+    filterTemplatesForSender(initialSenderId);
     updateReviewCard();
 });
 
-function onTemplateSelected(tplName) {
+function filterTemplatesForSender(senderId) {
+    senderId = parseInt(senderId, 10);
+    const select = document.getElementById('sel-template-name');
+    const notice = document.getElementById('sender-templates-notice');
+    if (!select) return;
+
+    select.innerHTML = '<option value="">-- Choose Approved Marketing Template --</option>';
+
+    // Filter only MARKETING templates belonging to this sender account
+    const matchingMarketing = allTemplatesData.filter(t => parseInt(t.sender_account_id, 10) === senderId && String(t.category).toUpperCase() === 'MARKETING');
+    const utilityCount = allTemplatesData.filter(t => parseInt(t.sender_account_id, 10) === senderId && String(t.category).toUpperCase() === 'UTILITY').length;
+
+    if (matchingMarketing.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.disabled = true;
+        opt.innerText = '-- No Marketing Templates Found for ' + (senderId === 3 ? 'PEPP Updates' : 'PEPP Learning') + ' --';
+        select.appendChild(opt);
+
+        if (notice) {
+            notice.style.display = 'block';
+            if (senderId === 3 && utilityCount > 0) {
+                notice.innerHTML = `<i class="fas fa-circle-info" style="color:#7c3aed; margin-right:4px;"></i> <strong>PEPP Updates Notice:</strong> ${utilityCount} utility templates (faculty session reminders) belong to this sender and are protected from marketing broadcast. To send an admissions marketing broadcast, choose <strong>PEPP Learning</strong> above.`;
+            } else {
+                notice.innerHTML = `<i class="fas fa-circle-info" style="color:#7c3aed; margin-right:4px;"></i> No approved marketing templates exist for this sender account.`;
+            }
+        }
+    } else {
+        if (notice) notice.style.display = 'none';
+        matchingMarketing.forEach(t => {
+            const opt = document.createElement('option');
+            opt.value = t.template_name;
+            opt.setAttribute('data-id', t.id);
+            opt.setAttribute('data-lang', t.language);
+            opt.setAttribute('data-sender', t.sender_account_id);
+            opt.innerText = `${t.template_name} (${t.language}) [ID #${t.id}]`;
+            select.appendChild(opt);
+        });
+    }
+
+    // Reset template selection on sender change
+    onTemplateSelected('', '');
+}
+
+function onTemplateSelected(tplName, tplId) {
     const infoCard = document.getElementById('tpl-info-card');
     const revTpl = document.getElementById('rev-template-name');
+    const inpTplId = document.getElementById('inp-template-id');
 
     if (!tplName) {
+        if (inpTplId) inpTplId.value = '';
         currentTemplateMeta = null;
-        infoCard.style.display = 'none';
-        revTpl.innerText = 'None selected';
+        if (infoCard) infoCard.style.display = 'none';
+        if (revTpl) revTpl.innerText = 'None selected';
         document.getElementById('section-variable-mapping').style.display = 'none';
         document.getElementById('section-media-header').style.display = 'none';
         return;
     }
 
-    revTpl.innerText = tplName;
+    if (inpTplId) inpTplId.value = tplId || '';
+    if (revTpl) revTpl.innerText = tplName;
     document.getElementById('tpl-card-name').innerText = tplName;
 
     // Auto populate campaign name if blank
@@ -2198,19 +2332,43 @@ function onTemplateSelected(tplName) {
         updateReviewCard();
     }
 
-    fetch(`communication-campaigns.php?action=ajax_get_template&template_name=${encodeURIComponent(tplName)}`)
+    const currentSenderId = parseInt(document.getElementById('inp-sender-account-id').value || 3, 10);
+
+    // Fast local lookup first
+    let found = allTemplatesData.find(t => (tplId && t.id == tplId) || (parseInt(t.sender_account_id, 10) === currentSenderId && t.template_name === tplName));
+    if (found) {
+        if (inpTplId && !inpTplId.value) inpTplId.value = found.id;
+        let meta = {};
+        try {
+            meta = typeof found.meta_data === 'string' ? JSON.parse(found.meta_data) : (found.meta_data || {});
+        } catch(e) {}
+        currentTemplateMeta = meta;
+        if (infoCard) infoCard.style.display = 'block';
+        document.getElementById('tpl-card-lang').innerText = found.language || 'en';
+        document.getElementById('tpl-card-body-preview').innerText = meta.body_text || '(No body text preview)';
+        const cardSenderBadge = document.getElementById('tpl-card-sender-badge');
+        if (cardSenderBadge) {
+            cardSenderBadge.innerText = (parseInt(found.sender_account_id, 10) === 3) ? 'PEPP Updates' : 'PEPP Learning';
+            cardSenderBadge.style.background = (parseInt(found.sender_account_id, 10) === 3) ? '#f5f3ff' : '#ecfdf5';
+            cardSenderBadge.style.color = (parseInt(found.sender_account_id, 10) === 3) ? '#6d28d9' : '#047857';
+        }
+        renderVariableMappingUI(meta);
+        renderMediaHeaderUI(meta);
+        updateVisualCardPreview();
+    }
+
+    // Call ajax_get_template for complete server validation & preview
+    fetch(`communication-campaigns.php?action=ajax_get_template&template_id=${encodeURIComponent(tplId || (found ? found.id : ''))}&template_name=${encodeURIComponent(tplName)}&sender_account_id=${encodeURIComponent(currentSenderId)}`)
         .then(r => r.json())
         .then(res => {
             if (res.success && res.meta) {
                 currentTemplateMeta = res.meta;
-                infoCard.style.display = 'block';
+                if (infoCard) infoCard.style.display = 'block';
                 document.getElementById('tpl-card-lang').innerText = res.meta.language || 'en';
-                document.getElementById('tpl-card-body-preview').innerText = res.meta.body_text || '(No body text preview)';
+                document.getElementById('tpl-card-body-preview').innerText = res.body_preview || res.meta.body_text || '(No body text preview)';
                 renderVariableMappingUI(res.meta);
                 renderMediaHeaderUI(res.meta);
                 updateVisualCardPreview();
-            } else {
-                infoCard.style.display = 'none';
             }
         });
 }
@@ -2231,7 +2389,7 @@ function onSenderSelected(key, id, name, isConfigured) {
     const cardNotif = document.getElementById('sender-card-notifications');
     const cardAdm = document.getElementById('sender-card-admissions');
 
-    if (key === 'notifications') {
+    if (key === 'notifications' || id === 3) {
         if (cardNotif) { cardNotif.style.borderColor = '#7c3aed'; cardNotif.style.background = '#f5f3ff'; }
         if (cardAdm) { cardAdm.style.borderColor = '#cbd5e1'; cardAdm.style.background = '#fff'; }
     } else {
@@ -2239,6 +2397,7 @@ function onSenderSelected(key, id, name, isConfigured) {
         if (cardAdm) { cardAdm.style.borderColor = '#7c3aed'; cardAdm.style.background = '#f5f3ff'; }
     }
 
+    filterTemplatesForSender(id);
     updateReviewCard();
 }
 

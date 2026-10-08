@@ -270,14 +270,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
         $pdo->beginTransaction();
         try {
-            $stmtUpsert = $pdo->prepare("
-                INSERT INTO communication_templates (channel, template_name, language, status, category, quality_status, rejection_reason, meta_data, updated_at)
-                VALUES ('whatsapp', ?, ?, ?, ?, ?, ?, ?, NOW())
-                ON DUPLICATE KEY UPDATE status = VALUES(status), category = VALUES(category), quality_status = VALUES(quality_status), rejection_reason = VALUES(rejection_reason), meta_data = VALUES(meta_data), updated_at = NOW()
-            ");
+            $hasScopeCols = $resolver->hasTemplateAccountColumns();
+            if ($hasScopeCols) {
+                $stmtUpsert = $pdo->prepare("
+                    INSERT INTO communication_templates (channel, sender_account_id, waba_id, meta_template_id, template_name, language, status, category, quality_status, rejection_reason, meta_data, updated_at)
+                    VALUES ('whatsapp', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                    ON DUPLICATE KEY UPDATE 
+                        waba_id = VALUES(waba_id),
+                        meta_template_id = VALUES(meta_template_id),
+                        status = VALUES(status),
+                        category = VALUES(category),
+                        quality_status = VALUES(quality_status),
+                        rejection_reason = VALUES(rejection_reason),
+                        meta_data = VALUES(meta_data),
+                        updated_at = NOW()
+                ");
+            } else {
+                $stmtUpsert = $pdo->prepare("
+                    INSERT INTO communication_templates (channel, template_name, language, status, category, quality_status, rejection_reason, meta_data, updated_at)
+                    VALUES ('whatsapp', ?, ?, ?, ?, ?, ?, ?, NOW())
+                    ON DUPLICATE KEY UPDATE status = VALUES(status), category = VALUES(category), quality_status = VALUES(quality_status), rejection_reason = VALUES(rejection_reason), meta_data = VALUES(meta_data), updated_at = NOW()
+                ");
+            }
 
             foreach ($wabaTargets as $tKey => $target) {
                 $targetWaba = $target['waba_id'];
+                $targetAccountId = (int)$target['account_id'];
                 $url = "https://graph.facebook.com/{$apiVersion}/{$targetWaba}/message_templates?limit=100";
                 $headers = ["Authorization: Bearer {$accessToken}"];
 
@@ -304,6 +322,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     $wabaCount = 0;
 
                     foreach ($templates as $tpl) {
+                        $metaTplId = $tpl['id'] ?? null;
                         $name = $tpl['name'] ?? '';
                         $lang = $tpl['language'] ?? 'en';
                         $status = strtolower($tpl['status'] ?? 'approved');
@@ -332,10 +351,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                             'footer_text' => $footerText,
                             'waba_id' => $targetWaba,
                             'sender_key' => $target['sender_key'],
-                            'account_id' => $target['account_id']
+                            'account_id' => $targetAccountId,
+                            'meta_template_id' => $metaTplId
                         ]);
 
-                        $stmtUpsert->execute([$name, $lang, $status, $category, $qualityStatus, $rejectedReason, $metaData]);
+                        if ($hasScopeCols) {
+                            $stmtUpsert->execute([
+                                $targetAccountId,
+                                $targetWaba,
+                                $metaTplId,
+                                $name,
+                                $lang,
+                                $status,
+                                $category,
+                                $qualityStatus,
+                                $rejectedReason,
+                                $metaData
+                            ]);
+                        } else {
+                            $stmtUpsert->execute([$name, $lang, $status, $category, $qualityStatus, $rejectedReason, $metaData]);
+                        }
                         $wabaCount++;
                     }
 
@@ -378,10 +413,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $error_message = 'Security token mismatch. Please try again.';
     } else {
         $posted_mappings = $_POST['mappings'] ?? [];
+        require_once 'includes/communication/WhatsAppAccountResolver.php';
+        $resolver = WhatsAppAccountResolver::getInstance($pdo);
 
         // Fetch all approved templates for validation lookup
-        $stmtTpls = $pdo->query("SELECT template_name, status, meta_data FROM communication_templates WHERE channel = 'whatsapp'");
-        $allTpls = $stmtTpls->fetchAll(PDO::FETCH_UNIQUE|PDO::FETCH_ASSOC);
+        $stmtTpls = $pdo->query("SELECT * FROM communication_templates WHERE channel = 'whatsapp'");
+        $allTplsById = [];
+        $allTplsByName = [];
+        while ($tRow = $stmtTpls->fetch(PDO::FETCH_ASSOC)) {
+            $tNorm = $resolver->normalizeTemplateRow($tRow);
+            $allTplsById[(int)$tNorm['id']] = $tNorm;
+            $allTplsByName[$tNorm['template_name']][] = $tNorm;
+        }
 
         // Fetch valid ERP variables list
         require_once 'includes/communication/CommunicationHelper.php';
@@ -389,16 +432,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
         $validationError = '';
         foreach ($posted_mappings as $evName => $data) {
-            $tplName = !empty($data['template_name']) ? $data['template_name'] : null;
-            if ($tplName) {
-                if (!isset($allTpls[$tplName])) {
-                    $validationError = "Selected template '{$tplName}' for event '{$evName}' does not exist.";
+            $tplId = !empty($data['template_id']) ? (int)$data['template_id'] : null;
+            $tplName = !empty($data['template_name']) ? trim($data['template_name']) : null;
+            $evSenderAcc = $resolver->resolveAccountForEvent($evName);
+            $evSenderId = $evSenderAcc ? (int)$evSenderAcc['id'] : 1;
+
+            $tpl = null;
+            if ($tplId && isset($allTplsById[$tplId])) {
+                $tpl = $allTplsById[$tplId];
+            } elseif ($tplName && isset($allTplsByName[$tplName])) {
+                // Find template matching event sender account
+                foreach ($allTplsByName[$tplName] as $cand) {
+                    if ((int)$cand['sender_account_id'] === $evSenderId) {
+                        $tpl = $cand;
+                        break;
+                    }
+                }
+                if (!$tpl) {
+                    $tpl = $allTplsByName[$tplName][0];
+                }
+            }
+
+            if ($tplId || $tplName) {
+                if (!$tpl) {
+                    $validationError = "Selected template for event '{$evName}' does not exist.";
                     break;
                 }
 
-                $tpl = $allTpls[$tplName];
                 if (strtolower($tpl['status']) !== 'approved') {
-                    $validationError = "Selected template '{$tplName}' for event '{$evName}' is not APPROVED (Current status: {$tpl['status']}).";
+                    $validationError = "Selected template '{$tpl['template_name']}' for event '{$evName}' is not APPROVED (Current status: {$tpl['status']}).";
+                    break;
+                }
+
+                // Verify sender account alignment: PEPP Updates vs PEPP Learning
+                if ((int)$tpl['sender_account_id'] !== $evSenderId) {
+                    $expectedSenderName = $evSenderAcc['display_name'] ?? "Account {$evSenderId}";
+                    $tplSenderAcc = $resolver->getAccount($tpl['sender_account_id']);
+                    $tplSenderName = $tplSenderAcc['display_name'] ?? "Account {$tpl['sender_account_id']}";
+                    $validationError = "Cross-WABA Mismatch: Event '{$evName}' belongs to {$expectedSenderName}, but template '{$tpl['template_name']}' belongs to {$tplSenderName}.";
                     break;
                 }
 
@@ -411,7 +482,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 // Ensure all expected parameters are mapped
                 foreach ($expectedIndexes as $i) {
                     if (!isset($rawParams[$i])) {
-                        $validationError = "Parameter {{{$i}}} is required but missing in mapping for template '{$tplName}'.";
+                        $validationError = "Parameter {{{$i}}} is required but missing in mapping for template '{$tpl['template_name']}'.";
                         break 2;
                     }
 
@@ -420,17 +491,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
                     if ($paramType === 'variable') {
                         if (empty($paramVal)) {
-                            $validationError = "Please select an ERP variable for parameter {{{$i}}} of template '{$tplName}'.";
+                            $validationError = "Please select an ERP variable for parameter {{{$i}}} of template '{$tpl['template_name']}'.";
                             break 2;
                         }
                         if (!in_array($paramVal, $validERPKeys, true)) {
-                            $validationError = "Invalid ERP variable key '{$paramVal}' for parameter {{{$i}}} of template '{$tplName}'.";
+                            $validationError = "Invalid ERP variable key '{$paramVal}' for parameter {{{$i}}} of template '{$tpl['template_name']}'.";
                             break 2;
                         }
                     } else {
                         // Custom text validation
                         if ($paramVal === '') {
-                            $validationError = "Custom text for parameter {{{$i}}} of template '{$tplName}' cannot be empty.";
+                            $validationError = "Custom text for parameter {{{$i}}} of template '{$tpl['template_name']}' cannot be empty.";
                             break 2;
                         }
                     }
@@ -439,7 +510,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 // Ensure no extraneous parameters beyond expected indexes are sent
                 foreach ($rawParams as $idx => $param) {
                     if (!in_array((int)$idx, $expectedIndexes, true)) {
-                        $validationError = "Invalid variable index '{{{$idx}}}' for template '{$tplName}' (not part of approved BODY variables).";
+                        $validationError = "Invalid variable index '{{{$idx}}}' for template '{$tpl['template_name']}' (not part of approved BODY variables).";
                         break 2;
                     }
                 }
@@ -451,14 +522,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         } else {
             $pdo->beginTransaction();
             try {
-                $stmtUp = $pdo->prepare("UPDATE communication_event_mappings SET template_name = ?, parameter_mappings = ? WHERE event_name = ?");
+                $hasCemCols = $resolver->hasEventMappingAccountColumns();
+                if ($hasCemCols) {
+                    $stmtUp = $pdo->prepare("UPDATE communication_event_mappings SET template_id = ?, template_name = ?, parameter_mappings = ?, sender_account_id = ? WHERE event_name = ?");
+                } else {
+                    $stmtUp = $pdo->prepare("UPDATE communication_event_mappings SET template_name = ?, parameter_mappings = ? WHERE event_name = ?");
+                }
+
                 foreach ($posted_mappings as $evName => $data) {
-                    $tplName = !empty($data['template_name']) ? $data['template_name'] : null;
+                    $tplId = !empty($data['template_id']) ? (int)$data['template_id'] : null;
+                    $tplName = !empty($data['template_name']) ? trim($data['template_name']) : null;
+                    $evSenderAcc = $resolver->resolveAccountForEvent($evName);
+                    $evSenderId = $evSenderAcc ? (int)$evSenderAcc['id'] : 1;
+
+                    $tpl = null;
+                    if ($tplId && isset($allTplsById[$tplId])) {
+                        $tpl = $allTplsById[$tplId];
+                        $tplName = $tpl['template_name'];
+                    } elseif ($tplName && isset($allTplsByName[$tplName])) {
+                        foreach ($allTplsByName[$tplName] as $cand) {
+                            if ((int)$cand['sender_account_id'] === $evSenderId) {
+                                $tpl = $cand;
+                                break;
+                            }
+                        }
+                        if (!$tpl) $tpl = $allTplsByName[$tplName][0];
+                        $tplId = (int)$tpl['id'];
+                    }
 
                     $rawParams = $data['parameters'] ?? [];
                     $params = [];
-                    if ($tplName && isset($allTpls[$tplName])) {
-                        $paramDef = CommunicationHelper::getTemplateParameterDefinition($allTpls[$tplName]['meta_data'] ?? []);
+                    if ($tpl) {
+                        $paramDef = CommunicationHelper::getTemplateParameterDefinition($tpl['meta_data'] ?? []);
                         $expectedIndexes = $paramDef['body']['indexes'];
                         foreach ($expectedIndexes as $idx) {
                             if (isset($rawParams[$idx])) {
@@ -470,7 +565,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                         }
                     }
 
-                    $stmtUp->execute([$tplName, json_encode($params), $evName]);
+                    if ($hasCemCols) {
+                        $stmtUp->execute([$tpl ? $tplId : null, $tpl ? $tplName : null, json_encode($params), $evSenderId, $evName]);
+                    } else {
+                        $stmtUp->execute([$tpl ? $tplName : null, json_encode($params), $evName]);
+                    }
                 }
                 $pdo->commit();
                 $success_message = 'Event template mappings updated successfully!';
@@ -499,13 +598,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         } else {
             try {
                 // Fetch template details to get language
-                $stmtTpl = $pdo->prepare("SELECT * FROM communication_templates WHERE template_name = ? LIMIT 1");
-                $stmtTpl->execute([$tplName]);
-                $template = $stmtTpl->fetch();
+                $testTplId = !empty($_POST['test_template_id']) ? (int)$_POST['test_template_id'] : 0;
+                $testSenderId = !empty($_POST['test_sender_account_id']) ? (int)$_POST['test_sender_account_id'] : 0;
+
+                $template = null;
+                if ($testTplId > 0) {
+                    $template = $resolver->getTemplateById($testTplId, $testSenderId ?: null);
+                }
+                if (!$template && !empty($tplName)) {
+                    $template = $resolver->resolveTemplate($tplName, $testSenderId ?: null);
+                }
 
                 if (!$template) {
-                    throw new Exception("Template '{$tplName}' not found.");
+                    throw new Exception("Template '{$tplName}' not found for the selected sender account.");
                 }
+
+                $template = $resolver->normalizeTemplateRow($template);
 
                 if (strtolower($template['status']) !== 'approved') {
                     throw new Exception("Template '{$tplName}' is not approved (Status: {$template['status']}).");
@@ -522,7 +630,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 }
 
                 $templateData = [
-                    'name' => $tplName,
+                    'name' => $template['template_name'],
                     'language' => $template['language'] ?? 'en',
                     'parameters' => $resolvedParams
                 ];
@@ -530,10 +638,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 require_once 'includes/communication/CommunicationEngine.php';
                 $engine = CommunicationEngine::getInstance($pdo);
 
-                // Determine sender account based on template WABA / metadata
-                $tplMeta = json_decode($template['meta_data'] ?? '', true) ?: [];
-                $tplWaba = $tplMeta['waba_id'] ?? null;
-                $senderAccId = ($tplWaba === '1099020233033644' || ($tplMeta['sender_key'] ?? '') === 'notifications') ? 3 : 1;
+                // Authoritative sender account from normalized template
+                $senderAccId = (int)$template['sender_account_id'];
                 $provider = $engine->getProvider('whatsapp', $senderAccId);
 
                 // Trigger send directly via provider for instant feedback
@@ -640,17 +746,65 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && in_array
 }
 
 // Load local synchronized templates
-$localTemplates = [];
+$localTemplatesRaw = [];
 try {
-    $localTemplates = $pdo->query("SELECT * FROM communication_templates WHERE channel = 'whatsapp' ORDER BY template_name ASC")->fetchAll();
+    $localTemplatesRaw = $pdo->query("SELECT * FROM communication_templates WHERE channel = 'whatsapp' ORDER BY template_name ASC")->fetchAll();
 } catch (Exception $ex) {}
+
+require_once 'includes/communication/WhatsAppAccountResolver.php';
+$resolver = WhatsAppAccountResolver::getInstance($pdo);
+
+$localTemplates = [];
+$admissionsApprovedCount = 0;
+$notifApprovedCount = 0;
+$approvedTemplates = [];
+$approvedTemplatesById = [];
+$approvedTemplatesBySender = [1 => [], 3 => []];
+
+require_once 'includes/communication/CommunicationHelper.php';
+foreach ($localTemplatesRaw as $tRaw) {
+    $tpl = $resolver->normalizeTemplateRow($tRaw);
+    $localTemplates[] = $tpl;
+    $sId = (int)$tpl['sender_account_id'];
+    $isApproved = (strtolower($tpl['status']) === 'approved');
+
+    if ($sId === 3) {
+        if ($isApproved) $notifApprovedCount++;
+    } else {
+        if ($isApproved) $admissionsApprovedCount++;
+    }
+
+    if ($isApproved) {
+        $paramDef = CommunicationHelper::getTemplateParameterDefinition($tpl['meta_data']);
+        $tData = [
+            'id' => (int)$tpl['id'],
+            'name' => $tpl['template_name'],
+            'sender_account_id' => $sId,
+            'waba_id' => $tpl['waba_id'],
+            'category' => $tpl['category'],
+            'language' => $tpl['language'],
+            'param_count' => $paramDef['body']['count'],
+            'body_indexes' => $paramDef['body']['indexes'],
+            'body_text' => $paramDef['body']['text'],
+            'has_header_var' => $paramDef['header']['has_variable'],
+            'header_indexes' => $paramDef['header']['indexes'],
+            'has_button_url_var' => $paramDef['button_url']['has_variable'],
+            'button_url_indexes' => $paramDef['button_url']['indexes']
+        ];
+        $approvedTemplates[$tpl['template_name']] = $tData;
+        $approvedTemplatesById[$tpl['id']] = $tData;
+        $approvedTemplatesBySender[$sId][$tpl['id']] = $tData;
+    }
+}
+
+$admissionsAcc = $resolver->getAccount(1);
+$notifAcc = $resolver->getAccount(3);
 
 // Load faculty instructions
 $facultyInstructions = [];
 try {
     $facultyInstructions = $pdo->query("SELECT * FROM faculty_session_instructions ORDER BY is_active DESC, language_name ASC")->fetchAll();
 } catch (Exception $ex) {}
-
 
 include 'includes/admin_nav.php';
 ?>
@@ -693,10 +847,10 @@ include 'includes/admin_nav.php';
 
     <?php if ($currentTab === 'sync'): ?>
     <!-- Sync Action Widget -->
-    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding:20px; margin-bottom:24px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px;">
+    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding:20px; margin-bottom:20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px;">
         <div>
             <h3 style="margin:0; font-size:1.1rem; font-weight:700; color:#1f2937;"><i class="fas fa-sync" style="color:#8b5cf6; margin-right:4px;"></i> Synchronize Approved Meta Templates</h3>
-            <p style="margin:4px 0 0; font-size:0.8rem; color:#6b7280;">Downloads and syncs all message templates approved in your Facebook Business account.</p>
+            <p style="margin:4px 0 0; font-size:0.8rem; color:#6b7280;">Downloads and syncs all message templates across both PEPP Learning and PEPP Updates WABAs using the global System User token.</p>
         </div>
         <form method="POST">
             <?php echo csrf_field(); ?>
@@ -705,6 +859,59 @@ include 'includes/admin_nav.php';
                 <i class="fas fa-arrow-rotate-forward"></i> Sync WhatsApp Templates
             </button>
         </form>
+    </div>
+
+    <!-- ── SENDER ACCOUNT TABS / CARDS (PHASE 5) ── -->
+    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap:16px; margin-bottom:24px;">
+        <!-- Card 1: PEPP Learning (Admissions) -->
+        <div id="sender-card-1" class="sender-scope-card" onclick="filterTemplatesBySender(1)" style="cursor:pointer; background:#fff; border:2.5px solid #059669; border-radius:14px; padding:18px; box-shadow:0 2px 6px rgba(5,150,105,0.08); transition:all 0.15s ease;">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                <div>
+                    <span style="display:inline-flex; align-items:center; gap:6px; font-size:0.7rem; font-weight:800; background:#ecfdf5; color:#047857; padding:3px 8px; border-radius:6px; text-transform:uppercase;">
+                        <span style="width:7px; height:7px; border-radius:50%; background:#10b981;"></span> Account 1 &bull; Admissions
+                    </span>
+                    <h4 style="margin:8px 0 2px; font-size:1.1rem; font-weight:800; color:#111827;">PEPP Learning</h4>
+                    <div style="font-size:0.82rem; font-weight:600; color:#374151; margin-top:2px;">
+                        <i class="fab fa-whatsapp" style="color:#059669;"></i> +91 62825 63209
+                    </div>
+                    <div style="font-size:0.72rem; color:#6b7280; margin-top:4px;">
+                        WABA: <code style="background:#f1f5f9; padding:2px 6px; border-radius:4px; font-weight:600;">1410328164305566</code>
+                    </div>
+                </div>
+                <div style="text-align:right;">
+                    <div style="font-size:1.6rem; font-weight:800; color:#059669; line-height:1;"><?php echo $admissionsApprovedCount; ?></div>
+                    <div style="font-size:0.7rem; color:#6b7280; font-weight:600; margin-top:4px;">Approved Templates</div>
+                </div>
+            </div>
+            <div style="margin-top:12px; padding-top:10px; border-top:1px dashed #e5e7eb; font-size:0.75rem; color:#047857; font-weight:700; display:flex; align-items:center; gap:4px;">
+                <i class="fas fa-filter"></i> Click to view PEPP Learning templates only
+            </div>
+        </div>
+
+        <!-- Card 3: PEPP Updates (Notifications) -->
+        <div id="sender-card-3" class="sender-scope-card" onclick="filterTemplatesBySender(3)" style="cursor:pointer; background:#fff; border:1.5px solid #e5e7eb; border-radius:14px; padding:18px; box-shadow:0 1px 3px rgba(0,0,0,0.03); transition:all 0.15s ease;">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                <div>
+                    <span style="display:inline-flex; align-items:center; gap:6px; font-size:0.7rem; font-weight:800; background:#f5f3ff; color:#6d28d9; padding:3px 8px; border-radius:6px; text-transform:uppercase;">
+                        <span style="width:7px; height:7px; border-radius:50%; background:#8b5cf6;"></span> Account 3 &bull; Notifications
+                    </span>
+                    <h4 style="margin:8px 0 2px; font-size:1.1rem; font-weight:800; color:#111827;">PEPP Updates</h4>
+                    <div style="font-size:0.82rem; font-weight:600; color:#374151; margin-top:2px;">
+                        <i class="fab fa-whatsapp" style="color:#7c3aed;"></i> +91 79943 04400
+                    </div>
+                    <div style="font-size:0.72rem; color:#6b7280; margin-top:4px;">
+                        WABA: <code style="background:#f1f5f9; padding:2px 6px; border-radius:4px; font-weight:600;">1099020233033644</code>
+                    </div>
+                </div>
+                <div style="text-align:right;">
+                    <div style="font-size:1.6rem; font-weight:800; color:#7c3aed; line-height:1;"><?php echo $notifApprovedCount; ?></div>
+                    <div style="font-size:0.7rem; color:#6b7280; font-weight:600; margin-top:4px;">Approved Templates</div>
+                </div>
+            </div>
+            <div style="margin-top:12px; padding-top:10px; border-top:1px dashed #e5e7eb; font-size:0.75rem; color:#6d28d9; font-weight:700; display:flex; align-items:center; gap:4px;">
+                <i class="fas fa-filter"></i> Click to view PEPP Updates templates only
+            </div>
+        </div>
     </div>
 
     <?php
@@ -726,34 +933,16 @@ include 'includes/admin_nav.php';
         'birthday_greeting' => "Triggered daily on a student's birthday with a personalized greeting and claim link.",
         'birthday_reward_claimed' => "Triggered after a student claims their birthday reward, sending coupon code, validity, and instructions link."
     ];
-
-    // Build array of approved templates for JS
-    require_once 'includes/communication/CommunicationHelper.php';
-    $approvedTemplates = [];
-    foreach ($localTemplates as $tpl) {
-        if (strtolower($tpl['status']) === 'approved') {
-            $paramDef = CommunicationHelper::getTemplateParameterDefinition($tpl['meta_data']);
-
-            $approvedTemplates[$tpl['template_name']] = [
-                'name' => $tpl['template_name'],
-                'language' => $tpl['language'],
-                'param_count' => $paramDef['body']['count'],
-                'body_indexes' => $paramDef['body']['indexes'],
-                'body_text' => $paramDef['body']['text'],
-                'has_header_var' => $paramDef['header']['has_variable'],
-                'header_indexes' => $paramDef['header']['indexes'],
-                'has_button_url_var' => $paramDef['button_url']['has_variable'],
-                'button_url_indexes' => $paramDef['button_url']['indexes']
-            ];
-        }
-    }
     ?>
 
     <div style="display:grid; grid-template-columns: 2fr 1fr; gap:24px; margin-bottom:24px;">
         <!-- Event Mappings Card -->
         <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding:24px; box-shadow:0 1px 3px rgba(0,0,0,0.05);">
-            <h3 style="margin:0 0 12px; font-size:1.1rem; font-weight:700; color:#1f2937;"><i class="fas fa-link" style="color:#4f46e5; margin-right:4px;"></i> PEPP ERP Event Mappings</h3>
-            <p style="margin:0 0 20px; font-size:0.8rem; color:#6b7280;">Map PEPP ERP core notification events to Meta-approved message templates and configure parameter interpolation.</p>
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:12px;">
+                <h3 style="margin:0; font-size:1.1rem; font-weight:700; color:#1f2937;"><i class="fas fa-link" style="color:#4f46e5; margin-right:4px;"></i> PEPP ERP Event Mappings</h3>
+                <span class="badge" style="background:#e0e7ff; color:#3730a3; font-size:0.75rem; font-weight:700;">WABA / Sender Scoped</span>
+            </div>
+            <p style="margin:0 0 20px; font-size:0.8rem; color:#6b7280;">Map PEPP ERP core notification events to Meta-approved message templates. Dropdowns are automatically filtered to the correct sender WABA to prevent cross-account misconfiguration.</p>
 
             <form method="POST">
                 <?php echo csrf_field(); ?>
@@ -764,21 +953,38 @@ include 'includes/admin_nav.php';
                         <?php
                             $eventName = $mapping['event_name'];
                             $mappedTpl = $mapping['template_name'] ?? '';
+                            $mappedTplId = (int)($mapping['template_id'] ?? 0);
                             $paramMappings = json_decode($mapping['parameter_mappings'], true) ?: [];
                             $label = str_replace('_', ' ', $eventName);
                             $description = $eventDescriptions[$eventName] ?? '';
+
+                            // Resolve canonical sender account for this event
+                            $evSenderAcc = $resolver->resolveAccountForEvent($eventName);
+                            $evSenderId = $evSenderAcc ? (int)$evSenderAcc['id'] : 1;
+                            $evSenderBadge = ($evSenderId === 3)
+                                ? '<span class="badge" style="background:#f5f3ff; color:#7c3aed; font-size:0.68rem; font-weight:700;"><i class="fab fa-whatsapp"></i> PEPP Updates (+91 79943 04400)</span>'
+                                : '<span class="badge" style="background:#ecfdf5; color:#059669; font-size:0.68rem; font-weight:700;"><i class="fab fa-whatsapp"></i> PEPP Learning (+91 62825 63209)</span>';
+
+                            // Templates available for this event (scoped to event sender account)
+                            $evAvailableTemplates = $approvedTemplatesBySender[$evSenderId] ?? [];
                         ?>
                         <div style="border:1px solid #f3f4f6; padding:16px; border-radius:12px; background:#fbfbfb;">
                             <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:12px; margin-bottom:12px;">
                                 <div>
-                                    <h4 style="margin:0; font-size:0.9rem; font-weight:700; color:#374151; text-transform:capitalize;"><?php echo htmlspecialchars($label); ?></h4>
+                                    <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+                                        <h4 style="margin:0; font-size:0.9rem; font-weight:700; color:#374151; text-transform:capitalize;"><?php echo htmlspecialchars($label); ?></h4>
+                                        <?php echo $evSenderBadge; ?>
+                                    </div>
                                     <span style="font-size:0.75rem; color:#9ca3af;"><?php echo htmlspecialchars($description); ?></span>
                                 </div>
                                 <div>
-                                    <select name="mappings[<?php echo htmlspecialchars($eventName); ?>][template_name]" class="form-control" style="width:220px; max-width:100%; border-radius:8px;" onchange="onMappingTemplateChange('<?php echo htmlspecialchars($eventName); ?>', this.value)">
+                                    <input type="hidden" name="mappings[<?php echo htmlspecialchars($eventName); ?>][sender_account_id]" value="<?php echo $evSenderId; ?>">
+                                    <select name="mappings[<?php echo htmlspecialchars($eventName); ?>][template_name]" class="form-control" style="width:230px; max-width:100%; border-radius:8px;" onchange="onMappingTemplateChange('<?php echo htmlspecialchars($eventName); ?>', this.value)">
                                         <option value="">- None (Disabled) -</option>
-                                        <?php foreach ($approvedTemplates as $tpl): ?>
-                                            <option value="<?php echo htmlspecialchars($tpl['name']); ?>" <?php echo $mappedTpl === $tpl['name'] ? 'selected' : ''; ?>><?php echo htmlspecialchars($tpl['name']); ?></option>
+                                        <?php foreach ($evAvailableTemplates as $tpl): ?>
+                                            <option value="<?php echo htmlspecialchars($tpl['name']); ?>" <?php echo $mappedTpl === $tpl['name'] ? 'selected' : ''; ?>>
+                                                <?php echo htmlspecialchars($tpl['name']); ?> (<?php echo htmlspecialchars($tpl['language']); ?>)
+                                            </option>
                                         <?php endforeach; ?>
                                     </select>
                                 </div>
@@ -807,7 +1013,6 @@ include 'includes/admin_nav.php';
                                                 <select name="mappings[<?php echo htmlspecialchars($eventName); ?>][parameters][<?php echo $i; ?>][value]" class="form-control value-field-variable" id="val-var-<?php echo htmlspecialchars($eventName); ?>-<?php echo $i; ?>" style="flex:1; font-size:0.75rem; display: <?php echo $mType === 'variable' ? 'inline-block' : 'none'; ?>;" onchange="updatePreviews('<?php echo htmlspecialchars($eventName); ?>')">
                                                     <option value="">-- Select Variable --</option>
                                                     <?php
-                                                    require_once 'includes/communication/CommunicationHelper.php';
                                                     $groupedVars = [];
                                                     foreach (CommunicationHelper::getERPVariables() as $k => $varInfo) {
                                                         $cat = $varInfo['category'] ?? 'General';
@@ -893,12 +1098,26 @@ include 'includes/admin_nav.php';
 
                     <div class="field">
                         <label style="font-size:0.8rem; font-weight:700; color:#4b5563; margin-bottom:4px; display:block;">Template Name <span style="color:#ef4444;">*</span></label>
-                        <select name="test_template_name" id="test-tpl-select" class="form-control" style="width:100%; border-radius:8px;" onchange="onTestTemplateSelect(this.value)" required>
+                        <select name="test_template_name" id="test-tpl-select" class="form-control" style="width:100%; border-radius:8px;" onchange="onTestTemplateSelect(this)" required>
                             <option value="">- Select Template -</option>
-                            <?php foreach ($approvedTemplates as $tpl): ?>
-                                <option value="<?php echo htmlspecialchars($tpl['name']); ?>"><?php echo htmlspecialchars($tpl['name']); ?></option>
-                            <?php endforeach; ?>
+                            <optgroup label="PEPP Learning (+91 62825 63209 &bull; WABA: 1410328164305566)">
+                                <?php foreach ($approvedTemplatesBySender[1] as $tpl): ?>
+                                    <option value="<?php echo htmlspecialchars($tpl['name']); ?>" data-id="<?php echo (int)$tpl['id']; ?>" data-sender="1" data-lang="<?php echo htmlspecialchars($tpl['language']); ?>">
+                                        <?php echo htmlspecialchars($tpl['name']); ?> (<?php echo htmlspecialchars($tpl['language']); ?>)
+                                    </option>
+                                <?php endforeach; ?>
+                            </optgroup>
+                            <optgroup label="PEPP Updates (+91 79943 04400 &bull; WABA: 1099020233033644)">
+                                <?php foreach ($approvedTemplatesBySender[3] as $tpl): ?>
+                                    <option value="<?php echo htmlspecialchars($tpl['name']); ?>" data-id="<?php echo (int)$tpl['id']; ?>" data-sender="3" data-lang="<?php echo htmlspecialchars($tpl['language']); ?>">
+                                        <?php echo htmlspecialchars($tpl['name']); ?> (<?php echo htmlspecialchars($tpl['language']); ?>)
+                                    </option>
+                                <?php endforeach; ?>
+                            </optgroup>
                         </select>
+                        <input type="hidden" name="test_template_id" id="test-tpl-id" value="">
+                        <input type="hidden" name="test_sender_account_id" id="test-tpl-sender-id" value="">
+                        <div id="test-tpl-sender-info" style="font-size:0.75rem; color:#6b7280; margin-top:4px;"></div>
                     </div>
 
                     <!-- Dynamic Test Parameters List -->
@@ -925,14 +1144,25 @@ include 'includes/admin_nav.php';
 
     <!-- Templates Table -->
     <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; overflow:hidden;">
-        <div style="background:#f8fafc; border-bottom:1px solid #e5e7eb; padding:14px 20px;">
-            <h3 style="margin:0; font-size:1rem; font-weight:700; color:#1f2937;"><i class="fas fa-list" style="margin-right:4px;"></i> Synchronized Templates (<?php echo count($localTemplates); ?>)</h3>
+        <div style="background:#f8fafc; border-bottom:1px solid #e5e7eb; padding:14px 20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+            <div>
+                <h3 id="table-title" style="margin:0; font-size:1rem; font-weight:700; color:#1f2937;">
+                    <i class="fas fa-list" style="margin-right:4px;"></i> Synchronized Templates (<span id="visible-tpl-count"><?php echo count($localTemplates); ?></span>)
+                </h3>
+                <span id="sender-filter-desc" style="font-size:0.75rem; color:#6b7280;">Showing all synchronized templates across accounts</span>
+            </div>
+            <!-- Quick Filter Buttons -->
+            <div style="display:flex; gap:6px;">
+                <button type="button" class="btn btn-sm" id="btn-filter-all" onclick="filterTemplatesBySender(0)" style="padding:4px 10px; border-radius:6px; font-size:0.75rem; font-weight:700; background:#f1f5f9; color:#334155; border:1px solid #cbd5e1;">All (<?php echo count($localTemplates); ?>)</button>
+                <button type="button" class="btn btn-sm" id="btn-filter-1" onclick="filterTemplatesBySender(1)" style="padding:4px 10px; border-radius:6px; font-size:0.75rem; font-weight:700; background:#fff; color:#047857; border:1px solid #a7f3d0;">PEPP Learning</button>
+                <button type="button" class="btn btn-sm" id="btn-filter-3" onclick="filterTemplatesBySender(3)" style="padding:4px 10px; border-radius:6px; font-size:0.75rem; font-weight:700; background:#fff; color:#6d28d9; border:1px solid #ddd6fe;">PEPP Updates</button>
+            </div>
         </div>
 
         <table class="data-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
             <thead>
                 <tr style="background:#f9fafb; text-align:left; border-bottom:1px solid #e5e7eb;">
-                    <th style="padding:12px; font-weight:600; color:#374151;">Template Name</th>
+                    <th style="padding:12px; font-weight:600; color:#374151;">Template Name &amp; Sender</th>
                     <th style="padding:12px; font-weight:600; color:#374151;">Category</th>
                     <th style="padding:12px; font-weight:600; color:#374151;">Language</th>
                     <th style="padding:12px; font-weight:600; color:#374151;">Meta Status &amp; Quality</th>
@@ -940,7 +1170,7 @@ include 'includes/admin_nav.php';
                     <th style="padding:12px; font-weight:600; color:#374151;">Preview / Structure</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody id="templates-tbody">
                 <?php if (empty($localTemplates)): ?>
                     <tr>
                         <td colspan="6" style="padding:30px; text-align:center; color:#9ca3af;"><i class="fas fa-layer-group" style="font-size:1.8rem; display:block; margin-bottom:8px; opacity:0.5;"></i> No templates synchronized. Click the sync button above to import.</td>
@@ -948,6 +1178,7 @@ include 'includes/admin_nav.php';
                 <?php else: ?>
                     <?php foreach ($localTemplates as $tpl): ?>
                         <?php
+                            $sId = (int)$tpl['sender_account_id'];
                             $meta = json_decode($tpl['meta_data'], true) ?: [];
                             $bodyText = $meta['body_text'] ?? '';
                             $headerText = $meta['header_text'] ?? '';
@@ -962,9 +1193,21 @@ include 'includes/admin_nav.php';
                             if ($qStatus === 'high' || $qStatus === 'green') $qColor = 'green';
                             elseif ($qStatus === 'medium' || $qStatus === 'yellow') $qColor = 'orange';
                             elseif ($qStatus === 'low' || $qStatus === 'red') $qColor = 'red';
+
+                            $senderBadge = ($sId === 3)
+                                ? '<span class="badge" style="background:#f5f3ff; color:#6d28d9; font-size:0.65rem; font-weight:700;"><i class="fab fa-whatsapp"></i> PEPP Updates</span>'
+                                : '<span class="badge" style="background:#ecfdf5; color:#047857; font-size:0.65rem; font-weight:700;"><i class="fab fa-whatsapp"></i> PEPP Learning</span>';
                         ?>
-                        <tr style="border-bottom:1px solid #f3f4f6;">
-                            <td style="padding:12px; font-weight:700; color:#111827;"><?php echo htmlspecialchars($tpl['template_name']); ?></td>
+                        <tr class="tpl-row tpl-sender-<?php echo $sId; ?>" data-sender="<?php echo $sId; ?>" style="border-bottom:1px solid #f3f4f6;">
+                            <td style="padding:12px; color:#111827;">
+                                <div style="font-weight:700; font-size:0.85rem; color:#111827;"><?php echo htmlspecialchars($tpl['template_name']); ?></div>
+                                <div style="display:flex; align-items:center; gap:6px; margin-top:3px;">
+                                    <?php echo $senderBadge; ?>
+                                    <?php if (!empty($tpl['id'])): ?>
+                                        <span style="font-size:0.65rem; color:#94a3b8; font-family:monospace;">#<?php echo (int)$tpl['id']; ?></span>
+                                    <?php endif; ?>
+                                </div>
+                            </td>
                             <td style="padding:12px;"><span class="badge gray" style="font-size:0.7rem; font-weight:700;"><?php echo strtoupper(str_replace('_', ' ', $tpl['category'])); ?></span></td>
                             <td style="padding:12px; font-weight:600;"><?php echo htmlspecialchars($tpl['language']); ?></td>
                             <td style="padding:12px;">
@@ -1493,6 +1736,7 @@ foreach ($eventMappings as $m) {
 }
 ?>
 const approvedTemplates = <?php echo json_encode($approvedTemplates); ?>;
+const approvedTemplatesById = <?php echo json_encode($approvedTemplatesById); ?>;
 const erpVariables = <?php echo json_encode(CommunicationHelper::getERPVariables()); ?>;
 const savedMappings = <?php echo json_encode($savedMappingsJs); ?>;
 const isFinancialRestricted = <?php echo json_encode(is_credential_restricted('financials')); ?>;
@@ -1709,7 +1953,82 @@ function updatePreviews(eventName) {
     }
 }
 
-function onTestTemplateSelect(selectedTemplateName) {
+function filterTemplatesBySender(senderId) {
+    const rows = document.querySelectorAll('.tpl-row');
+    let visibleCount = 0;
+
+    rows.forEach(r => {
+        const rSender = parseInt(r.getAttribute('data-sender') || '1', 10);
+        if (senderId === 0 || rSender === senderId) {
+            r.style.display = '';
+            visibleCount++;
+        } else {
+            r.style.display = 'none';
+        }
+    });
+
+    const countSpan = document.getElementById('visible-tpl-count');
+    if (countSpan) countSpan.innerText = visibleCount;
+
+    const descSpan = document.getElementById('sender-filter-desc');
+    if (descSpan) {
+        if (senderId === 1) {
+            descSpan.innerText = 'Showing PEPP Learning templates only (WABA: 1410328164305566)';
+        } else if (senderId === 3) {
+            descSpan.innerText = 'Showing PEPP Updates templates only (WABA: 1099020233033644)';
+        } else {
+            descSpan.innerText = 'Showing all synchronized templates across accounts';
+        }
+    }
+
+    // Update filter button styles
+    ['all', '1', '3'].forEach(k => {
+        const btn = document.getElementById('btn-filter-' + k);
+        if (!btn) return;
+        const isCurrent = (k === 'all' && senderId === 0) || (k === String(senderId));
+        if (isCurrent) {
+            btn.style.background = (k === '1') ? '#ecfdf5' : (k === '3' ? '#f5f3ff' : '#f1f5f9');
+            btn.style.borderColor = (k === '1') ? '#059669' : (k === '3' ? '#7c3aed' : '#475569');
+            btn.style.boxShadow = '0 1px 2px rgba(0,0,0,0.05)';
+        } else {
+            btn.style.background = '#fff';
+            btn.style.borderColor = '#e2e8f0';
+            btn.style.boxShadow = 'none';
+        }
+    });
+
+    // Update sender cards border
+    const card1 = document.getElementById('sender-card-1');
+    const card3 = document.getElementById('sender-card-3');
+    if (card1) card1.style.border = (senderId === 1) ? '2.5px solid #059669' : '1.5px solid #e5e7eb';
+    if (card3) card3.style.border = (senderId === 3) ? '2.5px solid #7c3aed' : '1.5px solid #e5e7eb';
+}
+
+function onTestTemplateSelect(selectEl) {
+    const sel = (typeof selectEl === 'string') ? document.getElementById('test-tpl-select') : selectEl;
+    if (!sel) return;
+
+    const opt = sel.options[sel.selectedIndex];
+    const selectedTemplateName = sel.value;
+    const tplId = opt ? opt.getAttribute('data-id') : '';
+    const senderId = opt ? parseInt(opt.getAttribute('data-sender') || '1', 10) : 1;
+
+    const tplIdInput = document.getElementById('test-tpl-id');
+    const tplSenderInput = document.getElementById('test-tpl-sender-id');
+    if (tplIdInput) tplIdInput.value = tplId || '';
+    if (tplSenderInput) tplSenderInput.value = senderId || '';
+
+    const senderInfo = document.getElementById('test-tpl-sender-info');
+    if (senderInfo) {
+        if (!selectedTemplateName) {
+            senderInfo.innerHTML = '';
+        } else if (senderId === 3) {
+            senderInfo.innerHTML = '<span style="color:#6d28d9; font-weight:700;"><i class="fab fa-whatsapp"></i> Routes via PEPP Updates (+91 79943 04400 &bull; WABA: 1099020233033644)</span>';
+        } else {
+            senderInfo.innerHTML = '<span style="color:#047857; font-weight:700;"><i class="fab fa-whatsapp"></i> Routes via PEPP Learning (+91 62825 63209 &bull; WABA: 1410328164305566)</span>';
+        }
+    }
+
     const section = document.getElementById('test-params-section');
     const paramList = document.getElementById('test-params-list');
     paramList.innerHTML = '';
@@ -1720,7 +2039,9 @@ function onTestTemplateSelect(selectedTemplateName) {
     }
 
     section.style.display = 'block';
-    const tplInfo = approvedTemplates[selectedTemplateName];
+    const tplInfo = (tplId && approvedTemplatesById && approvedTemplatesById[tplId])
+        ? approvedTemplatesById[tplId]
+        : approvedTemplates[selectedTemplateName];
 
     const bodyIndexes = (tplInfo && tplInfo.body_indexes) ? tplInfo.body_indexes : [];
     if (bodyIndexes.length > 0) {

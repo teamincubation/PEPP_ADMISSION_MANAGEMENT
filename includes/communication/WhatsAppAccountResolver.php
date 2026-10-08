@@ -407,4 +407,203 @@ class WhatsAppAccountResolver {
 
         return $this->hasEventSenderKeyCol;
     }
+
+    /**
+     * Checks if communication_templates table has sender_account_id column.
+     */
+    public function hasTemplateAccountColumns(): bool {
+        static $hasCol = null;
+        if ($hasCol !== null) {
+            return $hasCol;
+        }
+        try {
+            $driver = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            if ($driver === 'sqlite') {
+                $cols = $this->pdo->query("PRAGMA table_info(communication_templates)")->fetchAll(PDO::FETCH_ASSOC);
+                $names = array_column($cols, 'name');
+                $hasCol = in_array('sender_account_id', $names, true) && in_array('waba_id', $names, true);
+            } else {
+                $stmt = $this->pdo->query("SHOW COLUMNS FROM communication_templates LIKE 'sender_account_id'");
+                $hasCol = (bool)$stmt->fetchColumn();
+            }
+        } catch (Throwable $e) {
+            $hasCol = false;
+        }
+        return $hasCol;
+    }
+
+    /**
+     * Checks if communication_event_mappings table has sender_account_id column.
+     */
+    public function hasEventMappingAccountColumns(): bool {
+        static $hasCol = null;
+        if ($hasCol !== null) {
+            return $hasCol;
+        }
+        try {
+            $driver = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            if ($driver === 'sqlite') {
+                $cols = $this->pdo->query("PRAGMA table_info(communication_event_mappings)")->fetchAll(PDO::FETCH_ASSOC);
+                $names = array_column($cols, 'name');
+                $hasCol = in_array('sender_account_id', $names, true);
+            } else {
+                $stmt = $this->pdo->query("SHOW COLUMNS FROM communication_event_mappings LIKE 'sender_account_id'");
+                $hasCol = (bool)$stmt->fetchColumn();
+            }
+        } catch (Throwable $e) {
+            $hasCol = false;
+        }
+        return $hasCol;
+    }
+
+    /**
+     * Checks if communication_campaigns table has template_id column.
+     */
+    public function hasCampaignTemplateIdColumn(): bool {
+        static $hasCol = null;
+        if ($hasCol !== null) {
+            return $hasCol;
+        }
+        try {
+            $driver = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            if ($driver === 'sqlite') {
+                $cols = $this->pdo->query("PRAGMA table_info(communication_campaigns)")->fetchAll(PDO::FETCH_ASSOC);
+                $names = array_column($cols, 'name');
+                $hasCol = in_array('template_id', $names, true);
+            } else {
+                $stmt = $this->pdo->query("SHOW COLUMNS FROM communication_campaigns LIKE 'template_id'");
+                $hasCol = (bool)$stmt->fetchColumn();
+            }
+        } catch (Throwable $e) {
+            $hasCol = false;
+        }
+        return $hasCol;
+    }
+
+    /**
+     * Authoritative Template Resolution by ID with optional sender account enforcement.
+     *
+     * @param int $templateId
+     * @param int|null $expectedSenderAccountId
+     * @return array|null Returns template row normalized with sender_account_id & waba_id, or null
+     */
+    public function getTemplateById(int $templateId, ?int $expectedSenderAccountId = null): ?array {
+        if ($templateId <= 0) {
+            return null;
+        }
+        try {
+            $stmt = $this->pdo->prepare("SELECT * FROM communication_templates WHERE id = ? AND channel = 'whatsapp' LIMIT 1");
+            $stmt->execute([$templateId]);
+            $tpl = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$tpl) {
+                return null;
+            }
+
+            $tpl = $this->normalizeTemplateRow($tpl);
+
+            if ($expectedSenderAccountId !== null && (int)$tpl['sender_account_id'] !== (int)$expectedSenderAccountId) {
+                // Reject mismatch server-side
+                return null;
+            }
+
+            return $tpl;
+        } catch (Throwable $e) {
+            return null;
+        }
+    }
+
+    /**
+     * Authoritative Template Resolution by name, with sender account awareness.
+     *
+     * @param string $templateName
+     * @param int|null $senderAccountId
+     * @param string|null $language
+     * @return array|null
+     */
+    public function resolveTemplate(string $templateName, ?int $senderAccountId = null, ?string $language = null): ?array {
+        $cleanName = trim($templateName);
+        if ($cleanName === '') {
+            return null;
+        }
+
+        try {
+            if ($this->hasTemplateAccountColumns() && $senderAccountId !== null) {
+                $sql = "SELECT * FROM communication_templates WHERE channel = 'whatsapp' AND template_name = ? AND sender_account_id = ?";
+                $params = [$cleanName, (int)$senderAccountId];
+                if (!empty($language)) {
+                    $sql .= " AND language = ?";
+                    $params[] = $language;
+                }
+                $sql .= " LIMIT 1";
+                $stmt = $this->pdo->prepare($sql);
+                $stmt->execute($params);
+                $row = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($row) {
+                    return $this->normalizeTemplateRow($row);
+                }
+            }
+
+            // Fallback: search by name
+            $stmt = $this->pdo->prepare("SELECT * FROM communication_templates WHERE channel = 'whatsapp' AND template_name = ? ORDER BY id DESC");
+            $stmt->execute([$cleanName]);
+            $candidates = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            foreach ($candidates as $cand) {
+                $norm = $this->normalizeTemplateRow($cand);
+                if ($senderAccountId === null || (int)$norm['sender_account_id'] === (int)$senderAccountId) {
+                    if (empty($language) || ($norm['language'] ?? '') === $language) {
+                        return $norm;
+                    }
+                }
+            }
+
+            // If no sender-specific match, return first candidate normalized
+            if (!empty($candidates)) {
+                return $this->normalizeTemplateRow($candidates[0]);
+            }
+        } catch (Throwable $e) {
+            error_log("WhatsAppAccountResolver::resolveTemplate error: " . $e->getMessage());
+        }
+
+        return null;
+    }
+
+    /**
+     * Normalizes a communication_templates row, ensuring sender_account_id and waba_id are populated
+     * even if database migration 62 has not yet been applied.
+     */
+    public function normalizeTemplateRow(array $row): array {
+        $meta = json_decode($row['meta_data'] ?? '', true) ?: [];
+
+        $senderAccountId = isset($row['sender_account_id']) && $row['sender_account_id'] !== null ? (int)$row['sender_account_id'] : null;
+        $wabaId = !empty($row['waba_id']) ? trim((string)$row['waba_id']) : null;
+        $metaTplId = !empty($row['meta_template_id']) ? trim((string)$row['meta_template_id']) : null;
+
+        if ($senderAccountId === null || $wabaId === null) {
+            $tplName = $row['template_name'] ?? '';
+            $metaWaba = $meta['waba_id'] ?? null;
+            $metaAcc = $meta['account_id'] ?? null;
+            $metaSender = $meta['sender_key'] ?? null;
+
+            if ($metaWaba === '1099020233033644' || $metaAcc === 3 || $metaSender === 'notifications' ||
+                in_array($tplName, ['faculty_session_reminder', 'faculty_session_start', 'faculty_session_start_now', 'faculty_session_cancelled', 'faculty_session_scheduled'], true)) {
+                $senderAccountId = 3;
+                $wabaId = '1099020233033644';
+            } else {
+                $senderAccountId = 1;
+                $wabaId = '1410328164305566';
+            }
+        }
+
+        if (empty($metaTplId) && !empty($meta['meta_template_id'])) {
+            $metaTplId = (string)$meta['meta_template_id'];
+        }
+
+        $row['sender_account_id'] = $senderAccountId;
+        $row['waba_id'] = $wabaId;
+        $row['meta_template_id'] = $metaTplId;
+
+        return $row;
+    }
 }
+

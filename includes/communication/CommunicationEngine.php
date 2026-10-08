@@ -1148,9 +1148,8 @@ class CommunicationEngine {
 
             // Template status and parameters validation before sending
             if ($channel === 'whatsapp' && !empty($item['template_name'])) {
-                $stmtTpl = $this->pdo->prepare("SELECT * FROM communication_templates WHERE template_name = ? LIMIT 1");
-                $stmtTpl->execute([$item['template_name']]);
-                $template = $stmtTpl->fetch();
+                $queueSenderId = !empty($item['sender_account_id']) ? (int)$item['sender_account_id'] : null;
+                $template = $this->getAccountResolver()->resolveTemplate($item['template_name'], $queueSenderId);
                 if (!$template) {
                     throw new Exception("Template '{$item['template_name']}' not found in database.");
                 }
@@ -1381,9 +1380,8 @@ class CommunicationEngine {
                                 $params = $tplData['parameters'] ?? [];
 
                                 // Fetch template definition
-                                $stmtTpl = $this->pdo->prepare("SELECT meta_data FROM communication_templates WHERE template_name = ? LIMIT 1");
-                                $stmtTpl->execute([$item['template_name']]);
-                                $tplRec = $stmtTpl->fetch(PDO::FETCH_ASSOC);
+                                $queueSenderId = !empty($item['sender_account_id']) ? (int)$item['sender_account_id'] : null;
+                                $tplRec = $this->getAccountResolver()->resolveTemplate($item['template_name'], $queueSenderId);
                                 if ($tplRec) {
                                     $meta = json_decode($tplRec['meta_data'] ?? '', true) ?: [];
                                     $bodyTpl = $meta['body_text'] ?? '';
@@ -1605,23 +1603,41 @@ class CommunicationEngine {
             $studentUid = $contextData['student_uid'] ?? null;
         }
 
-        $stmt = $this->pdo->prepare("SELECT * FROM communication_event_mappings WHERE event_name = ? LIMIT 1");
-        $stmt->execute([$eventName]);
-        $mapping = $stmt->fetch();
+        $senderAcc = !empty($contextData['sender_account_id']) ? $this->getAccountResolver()->getAccount($contextData['sender_account_id']) : $this->resolveSenderAccountForEvent($eventName);
+        $senderAccountId = $senderAcc ? (int)$senderAcc['id'] : 1;
 
-        if (!$mapping || empty($mapping['template_name'])) {
+        $mapping = null;
+        if ($this->getAccountResolver()->hasEventMappingAccountColumns()) {
+            try {
+                $stmt = $this->pdo->prepare("SELECT * FROM communication_event_mappings WHERE event_name = ? AND (sender_account_id = ? OR sender_account_id IS NULL) ORDER BY sender_account_id DESC LIMIT 1");
+                $stmt->execute([$eventName, $senderAccountId]);
+                $mapping = $stmt->fetch();
+            } catch (Throwable $e) {}
+        }
+        if (!$mapping) {
+            $stmt = $this->pdo->prepare("SELECT * FROM communication_event_mappings WHERE event_name = ? LIMIT 1");
+            $stmt->execute([$eventName]);
+            $mapping = $stmt->fetch();
+        }
+
+        if (!$mapping || (empty($mapping['template_name']) && empty($mapping['template_id']))) {
             return null; // Event not mapped or mapping is disabled
         }
 
-        $templateName = $mapping['template_name'];
-
-        $stmtTpl = $this->pdo->prepare("SELECT * FROM communication_templates WHERE template_name = ? LIMIT 1");
-        $stmtTpl->execute([$templateName]);
-        $template = $stmtTpl->fetch();
+        $template = null;
+        if (!empty($mapping['template_id'])) {
+            $template = $this->getAccountResolver()->getTemplateById((int)$mapping['template_id']);
+        }
+        if (!$template && !empty($mapping['template_name'])) {
+            $template = $this->getAccountResolver()->resolveTemplate($mapping['template_name'], $senderAccountId);
+        }
 
         if (!$template) {
-            throw new Exception("Mapped template '{$templateName}' not found in database.");
+            $tName = $mapping['template_name'] ?? 'ID#' . ($mapping['template_id'] ?? '');
+            throw new Exception("Mapped template '{$tName}' not found in database.");
         }
+
+        $templateName = $template['template_name'];
 
         if (strtolower($template['status']) !== 'approved') {
             throw new Exception("Mapped template '{$templateName}' status is '{$template['status']}' (not approved).");

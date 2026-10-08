@@ -24,16 +24,19 @@ $apiVersion  = $settings['whatsapp_api_version'] ?? 'v20.0';
 
 require_once 'includes/communication/WhatsAppAccountResolver.php';
 $resolver = WhatsAppAccountResolver::getInstance($pdo);
-$notificationsAccount = $resolver->getAccount('notifications');
-$notificationsWabaId = $resolver->getWabaId('notifications');
-$notificationsPhoneId = trim((string)($notificationsAccount['phone_number_id'] ?? ''));
 
-// PEPP Updates (Account 3 / notifications) is authoritative for marketing templates
-$marketingWabaId  = !empty($notificationsWabaId) ? $notificationsWabaId : '1099020233033644';
-$marketingPhoneId = !empty($notificationsPhoneId) ? $notificationsPhoneId : ($settings['whatsapp_phone_id'] ?? '');
+// Determine active sender account context (default to Account 3 / notifications, or Account 1 / admissions)
+$selectedSenderId = isset($_REQUEST['sender_account_id']) ? (int)$_REQUEST['sender_account_id'] : 3;
+if ($selectedSenderId !== 1 && $selectedSenderId !== 3) {
+    $selectedSenderId = 3;
+}
+
+$selectedAccount  = $resolver->getAccount($selectedSenderId);
+$resolvedWabaId   = $resolver->getWabaId($selectedSenderId);
+$resolvedPhoneId  = trim((string)($selectedAccount['phone_number_id'] ?? ''));
 
 require_once 'includes/communication/Providers/WhatsAppCloudProvider.php';
-$provider = new WhatsAppCloudProvider($marketingWabaId, $marketingPhoneId, $accessToken, $apiVersion);
+$provider = new WhatsAppCloudProvider($resolvedWabaId, $resolvedPhoneId, $accessToken, $apiVersion);
 
 // Support list of languages
 $supported_languages = [
@@ -59,67 +62,89 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $tpl_id = (int)($_POST['template_id'] ?? 0);
             $stmtFind = $pdo->prepare("SELECT * FROM communication_templates WHERE id = ? AND channel = 'whatsapp' AND status = 'draft' LIMIT 1");
             $stmtFind->execute([$tpl_id]);
-            $tpl = $stmtFind->fetch();
+            $tplRaw = $stmtFind->fetch();
 
-            if (!$tpl) {
+            if (!$tplRaw) {
                 $error_message = 'Draft template not found or already submitted.';
             } else {
-                $meta = json_decode($tpl['meta_data'], true) ?: [];
-                $tpl_name = $tpl['template_name'];
-                $category = $tpl['category'];
-                $language = $tpl['language'];
-                $components = $meta['components'] ?? [];
-                $header_type = $meta['header_type'] ?? 'NONE';
-                $header_media_url = $meta['header_media_url'] ?? '';
+                $tpl = $resolver->normalizeTemplateRow($tplRaw);
+                $tplSenderId = (int)$tpl['sender_account_id'];
+                $targetAccount = $resolver->getAccount($tplSenderId);
+                $targetWabaId = $resolver->getWabaId($tplSenderId);
+                $targetPhoneId = trim((string)($targetAccount['phone_number_id'] ?? ''));
 
-                if ($header_type === 'IMAGE' && empty($header_media_url)) {
-                    $error_message = 'Please edit this draft and upload an image before submitting to Meta WABA.';
-                } elseif (empty($marketingWabaId) || empty($accessToken)) {
-                    $error_message = 'Please configure Meta Business Account ID and Access Token in settings first.';
+                if (empty($targetWabaId) || empty($accessToken)) {
+                    $error_message = 'Missing Meta WABA ID or Access Token for sender account ' . $tplSenderId . '.';
                 } else {
-                    // If image header, upload media first and replace handle in components
-                    if ($header_type === 'IMAGE' && !empty($header_media_url)) {
-                        $localFilename = basename($header_media_url);
-                        $localPath = __DIR__ . '/uploads/whatsapp_campaign_media/' . $localFilename;
-                        if (file_exists($localPath)) {
-                            $handle = $provider->uploadSampleMedia($localPath);
-                            if ($handle) {
-                                foreach ($components as &$comp) {
-                                    if ($comp['type'] === 'HEADER' && $comp['format'] === 'IMAGE') {
-                                        $comp['example'] = [
-                                            'header_handle' => [$handle]
-                                        ];
+                    $submitProvider = new WhatsAppCloudProvider($targetWabaId, $targetPhoneId, $accessToken, $apiVersion);
+                    $meta = json_decode($tpl['meta_data'], true) ?: [];
+                    $tpl_name = $tpl['template_name'];
+                    $category = $tpl['category'];
+                    $language = $tpl['language'];
+                    $components = $meta['components'] ?? [];
+                    $header_type = $meta['header_type'] ?? 'NONE';
+                    $header_media_url = $meta['header_media_url'] ?? '';
+
+                    if ($header_type === 'IMAGE' && empty($header_media_url)) {
+                        $error_message = 'Please edit this draft and upload an image before submitting to Meta WABA.';
+                    } else {
+                        // If image header, upload media first and replace handle in components
+                        if ($header_type === 'IMAGE' && !empty($header_media_url)) {
+                            $localFilename = basename($header_media_url);
+                            $localPath = __DIR__ . '/uploads/whatsapp_campaign_media/' . $localFilename;
+                            if (file_exists($localPath)) {
+                                $handle = $submitProvider->uploadSampleMedia($localPath);
+                                if ($handle) {
+                                    foreach ($components as &$comp) {
+                                        if ($comp['type'] === 'HEADER' && $comp['format'] === 'IMAGE') {
+                                            $comp['example'] = [
+                                                'header_handle' => [$handle]
+                                            ];
+                                        }
                                     }
+                                    unset($comp);
+                                } else {
+                                    $error_message = "Failed to upload image header to Meta: " . ($submitProvider->getLastError() ?: "Media upload failed.");
                                 }
-                                unset($comp);
                             } else {
-                                $error_message = "Failed to upload image header to Meta: " . ($provider->getLastError() ?: "Media upload failed.");
+                                $error_message = "Local header image file not found on server.";
                             }
-                        } else {
-                            $error_message = "Local header image file not found on server.";
                         }
-                    }
 
-                    if (empty($error_message)) {
-                        $res = $provider->createTemplate($tpl_name, $category, $language, $components);
-                        if ($res && !empty($res['success'])) {
-                            $meta_template_id = $res['id'] ?? null;
-                            $meta['meta_template_id'] = $meta_template_id;
-                            $meta_data_updated = json_encode($meta);
+                        if (empty($error_message)) {
+                            $res = $submitProvider->createTemplate($tpl_name, $category, $language, $components);
+                            if ($res && !empty($res['success'])) {
+                                $meta_template_id = $res['id'] ?? null;
+                                $meta['meta_template_id'] = $meta_template_id;
+                                $meta['waba_id'] = $targetWabaId;
+                                $meta['sender_account_id'] = $tplSenderId;
+                                $meta['sender_key'] = $targetAccount['sender_key'];
+                                $meta_data_updated = json_encode($meta);
 
-                            try {
-                                $stmtUpd = $pdo->prepare("
-                                    UPDATE communication_templates 
-                                    SET status = 'pending', meta_data = ?, updated_at = NOW() 
-                                    WHERE id = ?
-                                ");
-                                $stmtUpd->execute([$meta_data_updated, $tpl_id]);
-                                $success_message = "Template successfully submitted to Meta WABA! Status: PENDING. (Meta ID: {$meta_template_id})";
-                            } catch (Exception $e) {
-                                $error_message = "API submission succeeded but saving locally failed: " . $e->getMessage();
+                                try {
+                                    $hasCols = $resolver->hasTemplateAccountColumns();
+                                    if ($hasCols) {
+                                        $stmtUpd = $pdo->prepare("
+                                            UPDATE communication_templates 
+                                            SET sender_account_id = ?, waba_id = ?, meta_template_id = ?, status = 'pending', meta_data = ?, updated_at = NOW() 
+                                            WHERE id = ?
+                                        ");
+                                        $stmtUpd->execute([$tplSenderId, $targetWabaId, $meta_template_id, $meta_data_updated, $tpl_id]);
+                                    } else {
+                                        $stmtUpd = $pdo->prepare("
+                                            UPDATE communication_templates 
+                                            SET status = 'pending', meta_data = ?, updated_at = NOW() 
+                                            WHERE id = ?
+                                        ");
+                                        $stmtUpd->execute([$meta_data_updated, $tpl_id]);
+                                    }
+                                    $success_message = "Template successfully submitted to " . htmlspecialchars($targetAccount['display_name']) . " WABA ({$targetWabaId})! Status: PENDING. (Meta ID: {$meta_template_id})";
+                                } catch (Exception $e) {
+                                    $error_message = "API submission succeeded but saving locally failed: " . $e->getMessage();
+                                }
+                            } else {
+                                $error_message = $submitProvider->getLastError() ?: 'Unknown Error';
                             }
-                        } else {
-                            $error_message = $provider->getLastError() ?: 'Unknown Error';
                         }
                     }
                 }
@@ -132,6 +157,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $tpl_name = strtolower(trim($_POST['template_name'] ?? ''));
             $category = trim($_POST['category'] ?? 'MARKETING');
             $language = trim($_POST['language'] ?? 'en_US');
+            
+            $postedSenderId = isset($_POST['sender_account_id']) ? (int)$_POST['sender_account_id'] : $selectedSenderId;
+            if ($postedSenderId !== 1 && $postedSenderId !== 3) {
+                $postedSenderId = 3;
+            }
+            $targetAccount = $resolver->getAccount($postedSenderId);
+            $targetWabaId = $resolver->getWabaId($postedSenderId);
+            $targetPhoneId = trim((string)($targetAccount['phone_number_id'] ?? ''));
+            $actionProvider = new WhatsAppCloudProvider($targetWabaId, $targetPhoneId, $accessToken, $apiVersion);
             
             $header_type = trim($_POST['header_type'] ?? 'NONE');
             $header_text = trim($_POST['header_text'] ?? '');
@@ -192,11 +226,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } elseif (empty($body_text)) {
                 $error_message = 'Template body text cannot be empty.';
             } else {
-                // Check local duplicate template name
-                $stmtCheck = $pdo->prepare("SELECT id FROM communication_templates WHERE channel = 'whatsapp' AND template_name = ? AND id <> ? AND status <> 'deleted' LIMIT 1");
-                $stmtCheck->execute([$tpl_name, $edit_id]);
-                if ($stmtCheck->fetch()) {
-                    $error_message = "A local template named '{$tpl_name}' already exists.";
+                // Check local duplicate template name scoped to sender account
+                $hasCols = $resolver->hasTemplateAccountColumns();
+                $isDuplicate = false;
+                if ($hasCols) {
+                    $stmtCheck = $pdo->prepare("SELECT id FROM communication_templates WHERE channel = 'whatsapp' AND sender_account_id = ? AND template_name = ? AND id <> ? AND status <> 'deleted' LIMIT 1");
+                    $stmtCheck->execute([$postedSenderId, $tpl_name, $edit_id]);
+                    if ($stmtCheck->fetch()) {
+                        $isDuplicate = true;
+                    }
+                } else {
+                    $stmtCheck = $pdo->prepare("SELECT * FROM communication_templates WHERE channel = 'whatsapp' AND template_name = ? AND id <> ? AND status <> 'deleted'");
+                    $stmtCheck->execute([$tpl_name, $edit_id]);
+                    $cands = $stmtCheck->fetchAll();
+                    foreach ($cands as $cand) {
+                        $cNorm = $resolver->normalizeTemplateRow($cand);
+                        if ((int)$cNorm['sender_account_id'] === $postedSenderId) {
+                            $isDuplicate = true;
+                            break;
+                        }
+                    }
+                }
+
+                if ($isDuplicate) {
+                    $error_message = "A template named '{$tpl_name}' already exists under " . htmlspecialchars($targetAccount['display_name']) . ".";
                 } else {
                     // Extract body variables and check ordering
                     preg_match_all('/\{\{(\d+)\}\}/', $body_text, $body_matches);
@@ -249,16 +302,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                             $error_message = "Button " . htmlspecialchars($btnIndex) . " Action is SEND_TEMPLATE, but no Target Template is selected.";
                                             break;
                                         }
-                                        // Verify target template exists and is approved in local db
-                                        $stmtTplCheck = $pdo->prepare("SELECT status FROM communication_templates WHERE template_name = ? AND channel = 'whatsapp' LIMIT 1");
-                                        $stmtTplCheck->execute([$targetTpl]);
-                                        $tplStatus = $stmtTplCheck->fetchColumn();
-                                        if (!$tplStatus) {
-                                            $error_message = "Target template '{$targetTpl}' for Button " . htmlspecialchars($btnIndex) . " does not exist.";
+                                        // Verify target template exists and is approved under the same sender
+                                        $targetTplRecord = $resolver->resolveTemplate($targetTpl, $postedSenderId);
+                                        if (!$targetTplRecord) {
+                                            $error_message = "Target template '{$targetTpl}' for Button " . htmlspecialchars($btnIndex) . " does not exist under " . htmlspecialchars($targetAccount['display_name']) . ".";
                                             break;
                                         }
-                                        if (strtolower($tplStatus) !== 'approved') {
-                                            $error_message = "Target template '{$targetTpl}' for Button " . htmlspecialchars($btnIndex) . " is not approved (Status: {$tplStatus}). Only META APPROVED templates can be targets.";
+                                        if (strtolower($targetTplRecord['status']) !== 'approved') {
+                                            $error_message = "Target template '{$targetTpl}' for Button " . htmlspecialchars($btnIndex) . " is not approved (Status: {$targetTplRecord['status']}). Only META APPROVED templates can be targets.";
                                             break;
                                         }
                                     }
@@ -374,15 +425,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                         // Local serialization payload
                         $meta_data = json_encode([
-                            'is_marketing'   => true,
-                            'components'     => $components,
-                            'body_text'      => $body_text,
-                            'header_type'    => $header_type,
-                            'header_text'    => $header_text,
-                            'footer_text'    => $footer_text,
-                            'button_type'    => $button_type,
-                            'buttons'        => $buttons_input,
-                            'variables'      => $var_examples,
+                            'is_marketing'     => true,
+                            'sender_account_id'=> $postedSenderId,
+                            'waba_id'          => $targetWabaId,
+                            'sender_key'       => $targetAccount['sender_key'],
+                            'components'       => $components,
+                            'body_text'        => $body_text,
+                            'header_type'      => $header_type,
+                            'header_text'      => $header_text,
+                            'footer_text'      => $footer_text,
+                            'button_type'      => $button_type,
+                            'buttons'          => $buttons_input,
+                            'variables'        => $var_examples,
                             'header_media_url' => $header_media_url
                         ]);
 
@@ -404,39 +458,68 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                         $meta_array = json_decode($meta_data, true);
                                         $existMeta['button_type'] = $meta_array['button_type'] ?? 'NONE';
                                         $existMeta['buttons'] = $meta_array['buttons'] ?? [];
+                                        $existMeta['sender_account_id'] = $postedSenderId;
+                                        $existMeta['waba_id'] = $targetWabaId;
+                                        $existMeta['sender_key'] = $targetAccount['sender_key'];
                                         
                                         $meta_data_to_save = json_encode($existMeta);
                                         
-                                        $stmtUpdate = $pdo->prepare("
-                                            UPDATE communication_templates 
-                                            SET meta_data = ?, updated_at = NOW()
-                                            WHERE id = ?
-                                        ");
-                                        $stmtUpdate->execute([$meta_data_to_save, $edit_id]);
+                                        if ($hasCols) {
+                                            $stmtUpdate = $pdo->prepare("
+                                                UPDATE communication_templates 
+                                                SET sender_account_id = ?, waba_id = ?, meta_data = ?, updated_at = NOW()
+                                                WHERE id = ?
+                                            ");
+                                            $stmtUpdate->execute([$postedSenderId, $targetWabaId, $meta_data_to_save, $edit_id]);
+                                        } else {
+                                            $stmtUpdate = $pdo->prepare("
+                                                UPDATE communication_templates 
+                                                SET meta_data = ?, updated_at = NOW()
+                                                WHERE id = ?
+                                            ");
+                                            $stmtUpdate->execute([$meta_data_to_save, $edit_id]);
+                                        }
                                         $success_message = "ERP routing configuration for template '{$tpl_name}' updated successfully.";
                                     } else {
                                         // Local draft template: update everything
-                                        $stmtUpdate = $pdo->prepare("
-                                            UPDATE communication_templates 
-                                            SET template_name = ?, language = ?, category = ?, meta_data = ?, updated_at = NOW()
-                                            WHERE id = ?
-                                        ");
-                                        $stmtUpdate->execute([$tpl_name, $language, $category, $meta_data, $edit_id]);
-                                        $success_message = "Marketing template draft '{$tpl_name}' updated successfully.";
+                                        if ($hasCols) {
+                                            $stmtUpdate = $pdo->prepare("
+                                                UPDATE communication_templates 
+                                                SET sender_account_id = ?, waba_id = ?, template_name = ?, language = ?, category = ?, meta_data = ?, updated_at = NOW()
+                                                WHERE id = ?
+                                            ");
+                                            $stmtUpdate->execute([$postedSenderId, $targetWabaId, $tpl_name, $language, $category, $meta_data, $edit_id]);
+                                        } else {
+                                            $stmtUpdate = $pdo->prepare("
+                                                UPDATE communication_templates 
+                                                SET template_name = ?, language = ?, category = ?, meta_data = ?, updated_at = NOW()
+                                                WHERE id = ?
+                                            ");
+                                            $stmtUpdate->execute([$tpl_name, $language, $category, $meta_data, $edit_id]);
+                                        }
+                                        $success_message = "Marketing template draft '{$tpl_name}' updated successfully for " . htmlspecialchars($targetAccount['display_name']) . ".";
                                     }
                                 } else {
-                                    $stmtSave = $pdo->prepare("
-                                        INSERT INTO communication_templates (channel, template_name, language, status, category, meta_data, created_at, updated_at)
-                                        VALUES ('whatsapp', ?, ?, 'draft', ?, ?, NOW(), NOW())
-                                    ");
-                                    $stmtSave->execute([$tpl_name, $language, $category, $meta_data]);
-                                    $success_message = "Marketing template draft '{$tpl_name}' saved locally.";
+                                    if ($hasCols) {
+                                        $stmtSave = $pdo->prepare("
+                                            INSERT INTO communication_templates (channel, sender_account_id, waba_id, template_name, language, status, category, meta_data, created_at, updated_at)
+                                            VALUES ('whatsapp', ?, ?, ?, ?, 'draft', ?, ?, NOW(), NOW())
+                                        ");
+                                        $stmtSave->execute([$postedSenderId, $targetWabaId, $tpl_name, $language, $category, $meta_data]);
+                                    } else {
+                                        $stmtSave = $pdo->prepare("
+                                            INSERT INTO communication_templates (channel, template_name, language, status, category, meta_data, created_at, updated_at)
+                                            VALUES ('whatsapp', ?, ?, 'draft', ?, ?, NOW(), NOW())
+                                        ");
+                                        $stmtSave->execute([$tpl_name, $language, $category, $meta_data]);
+                                    }
+                                    $success_message = "Marketing template draft '{$tpl_name}' saved locally under " . htmlspecialchars($targetAccount['display_name']) . ".";
                                 }
                             } catch (Exception $e) {
                                 $error_message = "Failed to save draft: " . $e->getMessage();
                             }
                         } elseif ($action === 'submit_meta') {
-                            if (empty($businessId) || empty($accessToken)) {
+                            if (empty($targetWabaId) || empty($accessToken)) {
                                 $error_message = 'Please configure Meta Business Account ID and Access Token in settings first.';
                             } else {
                                 // If image header, upload media first and replace handle in components
@@ -444,7 +527,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     $localFilename = basename($header_media_url);
                                     $localPath = __DIR__ . '/uploads/whatsapp_campaign_media/' . $localFilename;
                                     if (file_exists($localPath)) {
-                                        $handle = $provider->uploadSampleMedia($localPath);
+                                        $handle = $actionProvider->uploadSampleMedia($localPath);
                                         if ($handle) {
                                             foreach ($components as &$comp) {
                                                 if ($comp['type'] === 'HEADER' && $comp['format'] === 'IMAGE') {
@@ -455,7 +538,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                             }
                                             unset($comp);
                                         } else {
-                                            $error_message = "Failed to upload image header to Meta: " . ($provider->getLastError() ?: "Media upload failed.");
+                                            $error_message = "Failed to upload image header to Meta: " . ($actionProvider->getLastError() ?: "Media upload failed.");
                                         }
                                     } else {
                                         $error_message = "Local header image file not found on server.";
@@ -463,8 +546,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 }
 
                                 if (empty($error_message)) {
-                                    // Execute Meta template creation call
-                                    $res = $provider->createTemplate($tpl_name, $category, $language, $components);
+                                    // Execute Meta template creation call directly against target sender WABA
+                                    $res = $actionProvider->createTemplate($tpl_name, $category, $language, $components);
                                     if ($res && !empty($res['success'])) {
                                         $meta_template_id = $res['id'] ?? null;
                                         
@@ -475,25 +558,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                                         try {
                                             if ($edit_id > 0) {
-                                                $stmtUpdate = $pdo->prepare("
-                                                    UPDATE communication_templates 
-                                                    SET template_name = ?, language = ?, status = 'pending', category = ?, meta_data = ?, updated_at = NOW()
-                                                    WHERE id = ?
-                                                ");
-                                                $stmtUpdate->execute([$tpl_name, $language, $category, $meta_data_updated, $edit_id]);
+                                                if ($hasCols) {
+                                                    $stmtUpdate = $pdo->prepare("
+                                                        UPDATE communication_templates 
+                                                        SET sender_account_id = ?, waba_id = ?, meta_template_id = ?, template_name = ?, language = ?, status = 'pending', category = ?, meta_data = ?, updated_at = NOW()
+                                                        WHERE id = ?
+                                                    ");
+                                                    $stmtUpdate->execute([$postedSenderId, $targetWabaId, $meta_template_id, $tpl_name, $language, $category, $meta_data_updated, $edit_id]);
+                                                } else {
+                                                    $stmtUpdate = $pdo->prepare("
+                                                        UPDATE communication_templates 
+                                                        SET template_name = ?, language = ?, status = 'pending', category = ?, meta_data = ?, updated_at = NOW()
+                                                        WHERE id = ?
+                                                    ");
+                                                    $stmtUpdate->execute([$tpl_name, $language, $category, $meta_data_updated, $edit_id]);
+                                                }
                                             } else {
-                                                $stmtSave = $pdo->prepare("
-                                                    INSERT INTO communication_templates (channel, template_name, language, status, category, meta_data, created_at, updated_at)
-                                                    VALUES ('whatsapp', ?, ?, 'pending', ?, ?, NOW(), NOW())
-                                                ");
-                                                $stmtSave->execute([$tpl_name, $language, $category, $meta_data_updated]);
+                                                if ($hasCols) {
+                                                    $stmtSave = $pdo->prepare("
+                                                        INSERT INTO communication_templates (channel, sender_account_id, waba_id, meta_template_id, template_name, language, status, category, meta_data, created_at, updated_at)
+                                                        VALUES ('whatsapp', ?, ?, ?, ?, ?, 'pending', ?, ?, NOW(), NOW())
+                                                    ");
+                                                    $stmtSave->execute([$postedSenderId, $targetWabaId, $meta_template_id, $tpl_name, $language, $category, $meta_data_updated]);
+                                                } else {
+                                                    $stmtSave = $pdo->prepare("
+                                                        INSERT INTO communication_templates (channel, template_name, language, status, category, meta_data, created_at, updated_at)
+                                                        VALUES ('whatsapp', ?, ?, 'pending', ?, ?, NOW(), NOW())
+                                                    ");
+                                                    $stmtSave->execute([$tpl_name, $language, $category, $meta_data_updated]);
+                                                }
                                             }
-                                            $success_message = "Template successfully submitted to Meta WABA! Status: PENDING. (Meta ID: {$meta_template_id})";
+                                            $success_message = "Template successfully submitted to " . htmlspecialchars($targetAccount['display_name']) . " WABA ({$targetWabaId})! Status: PENDING. (Meta ID: {$meta_template_id})";
                                         } catch (Exception $e) {
                                             $error_message = "API submission succeeded but saving locally failed: " . $e->getMessage();
                                         }
                                     } else {
-                                        $error_message = $provider->getLastError() ?: 'Unknown Error';
+                                        $error_message = $actionProvider->getLastError() ?: 'Unknown Error';
                                     }
                                 }
                             }
@@ -506,10 +606,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // 2. SYNC FROM META
         if ($action === 'sync_all') {
-            if (empty($businessId) || empty($accessToken)) {
-                $error_message = 'Please configure Business ID and Access Token in settings first.';
+            $syncSenderId = isset($_POST['sync_sender_account_id']) ? (int)$_POST['sync_sender_account_id'] : $selectedSenderId;
+            if ($syncSenderId !== 1 && $syncSenderId !== 3) {
+                $syncSenderId = 3;
+            }
+            $syncAccount = $resolver->getAccount($syncSenderId);
+            $syncWabaId = $resolver->getWabaId($syncSenderId);
+
+            if (empty($syncWabaId) || empty($accessToken)) {
+                $error_message = 'Please configure WABA ID and Access Token for ' . htmlspecialchars($syncAccount['display_name']) . '.';
             } else {
-                $url = "https://graph.facebook.com/{$apiVersion}/{$businessId}/message_templates?limit=100";
+                $url = "https://graph.facebook.com/{$apiVersion}/{$syncWabaId}/message_templates?limit=100";
                 $headers = ["Authorization: Bearer {$accessToken}"];
 
                 $ch = curl_init();
@@ -534,11 +641,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                         $pdo->beginTransaction();
                         try {
-                            $stmtUpsert = $pdo->prepare("
-                                INSERT INTO communication_templates (channel, template_name, language, status, category, quality_status, rejection_reason, meta_data, updated_at) 
-                                VALUES ('whatsapp', ?, ?, ?, ?, ?, ?, ?, NOW()) 
-                                ON DUPLICATE KEY UPDATE status = VALUES(status), category = VALUES(category), quality_status = VALUES(quality_status), rejection_reason = VALUES(rejection_reason), meta_data = VALUES(meta_data), updated_at = NOW()
-                            ");
+                            $hasCols = $resolver->hasTemplateAccountColumns();
+                            if ($hasCols) {
+                                $stmtUpsert = $pdo->prepare("
+                                    INSERT INTO communication_templates (channel, sender_account_id, waba_id, meta_template_id, template_name, language, status, category, quality_status, rejection_reason, meta_data, updated_at) 
+                                    VALUES ('whatsapp', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW()) 
+                                    ON DUPLICATE KEY UPDATE sender_account_id = VALUES(sender_account_id), waba_id = VALUES(waba_id), meta_template_id = VALUES(meta_template_id), status = VALUES(status), category = VALUES(category), quality_status = VALUES(quality_status), rejection_reason = VALUES(rejection_reason), meta_data = VALUES(meta_data), updated_at = NOW()
+                                ");
+                            } else {
+                                $stmtUpsert = $pdo->prepare("
+                                    INSERT INTO communication_templates (channel, template_name, language, status, category, quality_status, rejection_reason, meta_data, updated_at) 
+                                    VALUES ('whatsapp', ?, ?, ?, ?, ?, ?, ?, NOW()) 
+                                    ON DUPLICATE KEY UPDATE status = VALUES(status), category = VALUES(category), quality_status = VALUES(quality_status), rejection_reason = VALUES(rejection_reason), meta_data = VALUES(meta_data), updated_at = NOW()
+                                ");
+                            }
 
                             foreach ($templates as $tpl) {
                                 $name = $tpl['name'] ?? '';
@@ -562,12 +678,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 }
 
                                 // Load existing local metadata to preserve is_marketing flag if preset
-                                $stmtLocal = $pdo->prepare("SELECT meta_data FROM communication_templates WHERE template_name = ? LIMIT 1");
-                                $stmtLocal->execute([$name]);
+                                if ($hasCols) {
+                                    $stmtLocal = $pdo->prepare("SELECT meta_data FROM communication_templates WHERE channel = 'whatsapp' AND sender_account_id = ? AND template_name = ? LIMIT 1");
+                                    $stmtLocal->execute([$syncSenderId, $name]);
+                                } else {
+                                    $stmtLocal = $pdo->prepare("SELECT meta_data FROM communication_templates WHERE channel = 'whatsapp' AND template_name = ? LIMIT 1");
+                                    $stmtLocal->execute([$name]);
+                                }
                                 $existing_meta = json_decode($stmtLocal->fetchColumn() ?: '', true) ?: [];
 
                                 $metaData = json_encode([
                                     'is_marketing' => isset($existing_meta['is_marketing']) ? $existing_meta['is_marketing'] : ($category === 'MARKETING'),
+                                    'sender_account_id' => $syncSenderId,
+                                    'waba_id' => $syncWabaId,
+                                    'sender_key' => $syncAccount['sender_key'],
                                     'meta_template_id' => $tpl['id'] ?? null,
                                     'components' => $tpl['components'] ?? [],
                                     'body_text' => $bodyText,
@@ -576,12 +700,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     'header_media_url' => $existing_meta['header_media_url'] ?? null
                                 ]);
 
-                                $stmtUpsert->execute([$name, $lang, $status, $category, $qualityStatus, $rejectedReason, $metaData]);
+                                if ($hasCols) {
+                                    $stmtUpsert->execute([$syncSenderId, $syncWabaId, $tpl['id'] ?? null, $name, $lang, $status, $category, $qualityStatus, $rejectedReason, $metaData]);
+                                } else {
+                                    $stmtUpsert->execute([$name, $lang, $status, $category, $qualityStatus, $rejectedReason, $metaData]);
+                                }
                                 $syncedCount++;
                             }
 
                             $pdo->commit();
-                            $success_message = "Successfully synchronized {$syncedCount} templates from Meta Account.";
+                            $success_message = "Successfully synchronized {$syncedCount} templates for " . htmlspecialchars($syncAccount['display_name']) . " (WABA: {$syncWabaId}).";
                         } catch (Exception $e) {
                             $pdo->rollBack();
                             $error_message = "Sync database write failed: " . $e->getMessage();
@@ -595,33 +723,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // 3. DELETE TEMPLATE
         if ($action === 'delete_template') {
+            $delTplId = (int)($_POST['delete_template_id'] ?? 0);
             $tpl_name = trim($_POST['delete_name'] ?? '');
-            if (empty($tpl_name)) {
-                $error_message = 'Invalid template name for deletion.';
-            } else {
-                // Fetch local template to check status
-                $stmtFind = $pdo->prepare("SELECT status FROM communication_templates WHERE template_name = ? LIMIT 1");
-                $stmtFind->execute([$tpl_name]);
-                $localStatus = $stmtFind->fetchColumn();
+            
+            $tpl = null;
+            if ($delTplId > 0) {
+                $tpl = $resolver->getTemplateById($delTplId);
+            }
+            if (!$tpl && !empty($tpl_name)) {
+                $tpl = $resolver->resolveTemplate($tpl_name, $selectedSenderId);
+            }
 
-                if ($localStatus === 'draft') {
+            if (!$tpl) {
+                $error_message = 'Template not found for deletion.';
+            } else {
+                $tpl = $resolver->normalizeTemplateRow($tpl);
+                $tplSenderId = (int)$tpl['sender_account_id'];
+                $delAccount = $resolver->getAccount($tplSenderId);
+                $delWabaId = $resolver->getWabaId($tplSenderId);
+                $delPhoneId = trim((string)($delAccount['phone_number_id'] ?? ''));
+
+                if ($tpl['status'] === 'draft') {
                     // Drafts are deleted locally only
-                    $stmtDel = $pdo->prepare("DELETE FROM communication_templates WHERE template_name = ?");
-                    $stmtDel->execute([$tpl_name]);
-                    $success_message = "Draft template '{$tpl_name}' deleted locally.";
+                    $stmtDel = $pdo->prepare("DELETE FROM communication_templates WHERE id = ?");
+                    $stmtDel->execute([$tpl['id']]);
+                    $success_message = "Draft template '{$tpl['template_name']}' deleted locally.";
                 } else {
-                    if (empty($businessId) || empty($accessToken)) {
+                    if (empty($delWabaId) || empty($accessToken)) {
                         $error_message = 'Please configure Meta Business ID and Access Token in settings first.';
                     } else {
-                        // Request deletion from Meta API
-                        $res = $provider->deleteTemplate($tpl_name);
+                        $delProvider = new WhatsAppCloudProvider($delWabaId, $delPhoneId, $accessToken, $apiVersion);
+                        $res = $delProvider->deleteTemplate($tpl['template_name']);
                         if ($res) {
-                            // Update local record to deleted status to maintain audit trail
-                            $stmtUpd = $pdo->prepare("UPDATE communication_templates SET status = 'deleted', updated_at = NOW() WHERE template_name = ?");
-                            $stmtUpd->execute([$tpl_name]);
-                            $success_message = "Template '{$tpl_name}' successfully deleted from Meta and marked as DELETED locally.";
+                            $stmtUpd = $pdo->prepare("UPDATE communication_templates SET status = 'deleted', updated_at = NOW() WHERE id = ?");
+                            $stmtUpd->execute([$tpl['id']]);
+                            $success_message = "Template '{$tpl['template_name']}' successfully deleted from " . htmlspecialchars($delAccount['display_name']) . " WABA and marked as DELETED locally.";
                         } else {
-                            $error_message = "Meta API deletion rejected: " . $provider->getLastError();
+                            $error_message = "Meta API deletion rejected: " . $delProvider->getLastError();
                         }
                     }
                 }
@@ -652,6 +790,12 @@ $f_language = trim($_GET['language'] ?? '');
 $where = ["channel = 'whatsapp' AND status <> 'deleted'"];
 $params = [];
 
+$hasCols = $resolver->hasTemplateAccountColumns();
+if ($hasCols) {
+    $where[] = "sender_account_id = ?";
+    $params[] = $selectedSenderId;
+}
+
 if ($f_search !== '') {
     $where[] = "template_name LIKE ?";
     $params[] = "%{$f_search}%";
@@ -672,20 +816,32 @@ if ($f_language !== '') {
 $where_sql = implode(' AND ', $where);
 $stmtList = $pdo->prepare("SELECT * FROM communication_templates WHERE {$where_sql} ORDER BY id DESC");
 $stmtList->execute($params);
-$localTemplates = $stmtList->fetchAll(PDO::FETCH_ASSOC);
+$localTemplatesRaw = $stmtList->fetchAll(PDO::FETCH_ASSOC);
 
-// Query Meta Approved templates for Quick Reply targets
-$stmtApproved = $pdo->prepare("SELECT template_name, language FROM communication_templates WHERE channel = 'whatsapp' AND status = 'approved' ORDER BY template_name ASC");
-$stmtApproved->execute();
-$approvedTemplates = $stmtApproved->fetchAll(PDO::FETCH_ASSOC);
-
-// Map local templates to separate Marketing and Non-marketing for isolation
+$localTemplates = [];
 $marketingTemplates = [];
-foreach ($localTemplates as $tpl) {
+foreach ($localTemplatesRaw as $tRaw) {
+    $tpl = $resolver->normalizeTemplateRow($tRaw);
+    if (!$hasCols && (int)$tpl['sender_account_id'] !== $selectedSenderId) {
+        continue;
+    }
+    $localTemplates[] = $tpl;
     $meta = json_decode($tpl['meta_data'], true) ?: [];
     // Identify as marketing if explicitly flagged in JSON or if Meta category is MARKETING
     if (!empty($meta['is_marketing']) || strtoupper($tpl['category']) === 'MARKETING') {
         $marketingTemplates[] = $tpl;
+    }
+}
+
+// Query Meta Approved templates for Quick Reply targets (scoped to selected sender account)
+$stmtApproved = $pdo->prepare("SELECT * FROM communication_templates WHERE channel = 'whatsapp' AND status = 'approved' ORDER BY template_name ASC");
+$stmtApproved->execute();
+$allApprovedRaw = $stmtApproved->fetchAll(PDO::FETCH_ASSOC);
+$approvedTemplates = [];
+foreach ($allApprovedRaw as $ar) {
+    $norm = $resolver->normalizeTemplateRow($ar);
+    if ((int)$norm['sender_account_id'] === $selectedSenderId) {
+        $approvedTemplates[] = $norm;
     }
 }
 
@@ -849,19 +1005,44 @@ include 'includes/admin_nav.php';
         <a href="whatsapp-inbox.php" class="btn btn-sm btn-outline" style="border-radius:8px;"><i class="fab fa-whatsapp"></i> WhatsApp Inbox</a>
     </div>
 
-    <!-- Toggle Action Panels -->
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:16px;">
-        <div>
-            <h2 style="margin:0; font-size:1.4rem; font-weight:800; color:#1e293b;">WhatsApp Marketing Template Manager</h2>
-            <p style="margin:4px 0 0; font-size:0.8rem; color:#64748b;">Manage approved Meta marketing templates isolated from your ERP core transactional messages.</p>
+    <!-- ── SENDER ACCOUNT SELECTOR & TOGGLE (PHASE 7) ── -->
+    <div style="background:#fff; border:1px solid #e2e8f0; border-radius:16px; padding:18px 20px; margin-bottom:20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px; box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+        <div style="display:flex; align-items:center; gap:20px; flex-wrap:wrap;">
+            <div>
+                <label style="font-size:0.75rem; font-weight:800; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:6px;">
+                    WhatsApp Sender
+                </label>
+                <div style="display:flex; gap:8px;">
+                    <a href="?sender_account_id=3" class="btn btn-sm" style="border-radius:8px; font-weight:700; padding:6px 14px; <?php echo $selectedSenderId === 3 ? 'background:#f5f3ff; color:#6d28d9; border:2px solid #7c3aed;' : 'background:#fff; color:#475569; border:1px solid #cbd5e1;'; ?>">
+                        <i class="fab fa-whatsapp"></i> PEPP Updates (Account 3)
+                    </a>
+                    <a href="?sender_account_id=1" class="btn btn-sm" style="border-radius:8px; font-weight:700; padding:6px 14px; <?php echo $selectedSenderId === 1 ? 'background:#ecfdf5; color:#047857; border:2px solid #059669;' : 'background:#fff; color:#475569; border:1px solid #cbd5e1;'; ?>">
+                        <i class="fab fa-whatsapp"></i> PEPP Learning (Account 1)
+                    </a>
+                </div>
+            </div>
+            <div style="padding-left:16px; border-left:1px solid #e2e8f0;">
+                <div style="font-size:1rem; font-weight:800; color:#1e293b;">
+                    <?php echo htmlspecialchars($selectedAccount['display_name']); ?>
+                    <span class="badge" style="font-size:0.7rem; font-weight:800; <?php echo $selectedSenderId === 3 ? 'background:#f5f3ff; color:#6d28d9;' : 'background:#ecfdf5; color:#047857;'; ?>">
+                        Account <?php echo $selectedSenderId; ?> &bull; <?php echo htmlspecialchars($selectedAccount['sender_key']); ?>
+                    </span>
+                </div>
+                <div style="font-size:0.8rem; color:#475569; margin-top:2px;">
+                    <i class="fab fa-whatsapp" style="color:<?php echo $selectedSenderId === 3 ? '#7c3aed' : '#059669'; ?>;"></i> <?php echo htmlspecialchars($selectedAccount['phone_number']); ?>
+                    &nbsp;&bull;&nbsp;
+                    WABA: <code style="background:#f1f5f9; padding:2px 6px; border-radius:4px; font-weight:700;"><?php echo htmlspecialchars($resolvedWabaId); ?></code>
+                </div>
+            </div>
         </div>
-        <div style="display:flex; gap:10px;">
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
             <button onclick="toggleView('list')" class="btn btn-outline" id="btn-tab-list" style="border-radius:8px; font-weight:700;"><i class="fas fa-list"></i> View Templates</button>
             <button onclick="toggleView('create')" class="btn btn-primary" id="btn-tab-create" style="border-radius:8px; font-weight:700;"><i class="fas fa-plus"></i> Create Template</button>
-            <form method="POST" style="display:inline-block;">
+            <form method="POST" style="display:inline-block; margin:0;">
                 <?php echo csrf_field(); ?>
                 <input type="hidden" name="action" value="sync_all">
-                <button type="submit" class="btn btn-success" style="border-radius:8px; font-weight:700;"><i class="fas fa-arrow-rotate-forward"></i> Sync with Meta</button>
+                <input type="hidden" name="sync_sender_account_id" value="<?php echo $selectedSenderId; ?>">
+                <button type="submit" class="btn btn-success" style="border-radius:8px; font-weight:700;"><i class="fas fa-arrow-rotate-forward"></i> Sync <?php echo htmlspecialchars($selectedAccount['display_name']); ?> Templates</button>
             </form>
         </div>
     </div>
@@ -871,6 +1052,7 @@ include 'includes/admin_nav.php';
         <!-- Filters Row -->
         <div style="background:#fff; border:1px solid #e2e8f0; border-radius:16px; padding:16px; margin-bottom:20px;">
             <form method="GET" id="templates-filter-form">
+                <input type="hidden" name="sender_account_id" value="<?php echo $selectedSenderId; ?>">
                 <div>
                     <label style="font-size:0.75rem; font-weight:700; color:#475569; display:block; margin-bottom:4px;">Search Name</label>
                     <input type="text" name="search" class="form-control" value="<?php echo htmlspecialchars($f_search); ?>" placeholder="e.g. cuet_pg_2027" style="border-radius:8px; font-size:0.8rem;">
@@ -904,7 +1086,7 @@ include 'includes/admin_nav.php';
                 </div>
                 <div style="display:flex; gap:8px;">
                     <button type="submit" class="btn btn-primary" style="border-radius:8px; padding:10px 16px;"><i class="fas fa-filter"></i> Filter</button>
-                    <a href="whatsapp-marketing-templates.php" class="btn btn-outline" style="border-radius:8px; padding:10px 16px;"><i class="fas fa-arrow-rotate-left"></i> Reset</a>
+                    <a href="whatsapp-marketing-templates.php?sender_account_id=<?php echo $selectedSenderId; ?>" class="btn btn-outline" style="border-radius:8px; padding:10px 16px;"><i class="fas fa-arrow-rotate-left"></i> Reset</a>
                 </div>
             </form>
         </div>
@@ -915,7 +1097,7 @@ include 'includes/admin_nav.php';
                 <table class="data-table" style="width:100%; min-width:1200px; border-collapse:collapse; font-size:0.85rem;">
                 <thead>
                     <tr style="background:#f8fafc; text-align:left; border-bottom:1px solid #e2e8f0;">
-                        <th style="padding:14px; font-weight:700; color:#475569;">Template Name</th>
+                        <th style="padding:14px; font-weight:700; color:#475569;">Template Name &amp; Sender</th>
                         <th style="padding:14px; font-weight:700; color:#475569;">Category</th>
                         <th style="padding:14px; font-weight:700; color:#475569;">Language</th>
                         <th style="padding:14px; font-weight:700; color:#475569;">Header Format</th>
@@ -929,11 +1111,12 @@ include 'includes/admin_nav.php';
                 <tbody>
                     <?php if (empty($marketingTemplates)): ?>
                         <tr>
-                            <td colspan="9" style="padding:40px; text-align:center; color:#94a3b8;"><i class="fas fa-layer-group" style="font-size:2rem; display:block; margin-bottom:8px; opacity:0.4;"></i> No marketing templates found. Click "Create Template" to get started.</td>
+                            <td colspan="9" style="padding:40px; text-align:center; color:#94a3b8;"><i class="fas fa-layer-group" style="font-size:2rem; display:block; margin-bottom:8px; opacity:0.4;"></i> No templates found for <?php echo htmlspecialchars($selectedAccount['display_name']); ?>. Click "Create Template" or "Sync" to get started.</td>
                         </tr>
                     <?php else: ?>
                         <?php foreach ($marketingTemplates as $tpl): ?>
                             <?php 
+                                $sId = (int)$tpl['sender_account_id'];
                                 $meta = json_decode($tpl['meta_data'], true) ?: [];
                                 $bodyText = $meta['body_text'] ?? '';
                                 $headerType = $meta['header_type'] ?? 'NONE';
@@ -954,9 +1137,19 @@ include 'includes/admin_nav.php';
                                     $statusBadge = 'red';
                                     $statusLabel = 'META REJECTED';
                                 }
+
+                                $rowSenderBadge = ($sId === 3)
+                                    ? '<span class="badge" style="background:#f5f3ff; color:#6d28d9; font-size:0.65rem; font-weight:700;"><i class="fab fa-whatsapp"></i> PEPP Updates</span>'
+                                    : '<span class="badge" style="background:#ecfdf5; color:#047857; font-size:0.65rem; font-weight:700;"><i class="fab fa-whatsapp"></i> PEPP Learning</span>';
                             ?>
                             <tr style="border-bottom:1px solid #f1f5f9;">
-                                <td style="padding:14px; font-weight:700; color:#1e293b;"><?php echo htmlspecialchars($tpl['template_name']); ?></td>
+                                <td style="padding:14px; color:#1e293b;">
+                                    <div style="font-weight:700;"><?php echo htmlspecialchars($tpl['template_name']); ?></div>
+                                    <div style="display:flex; align-items:center; gap:6px; margin-top:3px;">
+                                        <?php echo $rowSenderBadge; ?>
+                                        <span style="font-size:0.65rem; color:#94a3b8; font-family:monospace;">#<?php echo (int)$tpl['id']; ?></span>
+                                    </div>
+                                </td>
                                 <td style="padding:14px;"><span class="badge gray" style="font-size:0.7rem; font-weight:700;"><?php echo strtoupper($tpl['category']); ?></span></td>
                                 <td style="padding:14px; font-weight:600;"><?php echo htmlspecialchars($tpl['language']); ?></td>
                                 <td style="padding:14px;"><span class="badge blue" style="font-size:0.7rem; font-weight:700;"><?php echo $headerType; ?></span></td>
@@ -971,30 +1164,35 @@ include 'includes/admin_nav.php';
                                 <td style="padding:14px; text-align:right;">
                                     <div style="display:inline-flex; gap:8px; align-items:center;">
                                         <?php if ($tpl['status'] === 'draft'): ?>
-                                            <a href="?edit_id=<?php echo $tpl['id']; ?>" class="btn btn-sm btn-outline" style="padding:4px 8px; border-radius:6px; font-size:0.75rem; color:#7c3aed; border-color:#ddd6fe; background:#f5f3ff; text-decoration:none;"><i class="fas fa-edit"></i> Edit</a>
+                                            <a href="?edit_id=<?php echo $tpl['id']; ?>&sender_account_id=<?php echo $sId; ?>" class="btn btn-sm btn-outline" style="padding:4px 8px; border-radius:6px; font-size:0.75rem; color:#7c3aed; border-color:#ddd6fe; background:#f5f3ff; text-decoration:none;"><i class="fas fa-edit"></i> Edit</a>
                                             
                                             <form method="POST" style="display:inline-block; margin:0;">
                                                 <?php echo csrf_field(); ?>
                                                 <input type="hidden" name="action" value="submit_draft_to_meta">
                                                 <input type="hidden" name="template_id" value="<?php echo $tpl['id']; ?>">
+                                                <input type="hidden" name="sender_account_id" value="<?php echo $sId; ?>">
                                                 <button type="submit" class="btn btn-sm btn-success" style="padding:4px 8px; border-radius:6px; font-size:0.75rem; background:#10b981; border-color:#059669; color:#fff;"><i class="fas fa-rocket"></i> Submit</button>
                                             </form>
                                             
                                             <form method="POST" onsubmit="return confirm('This will delete the local template draft. Continue?');" style="display:inline-block; margin:0;">
                                                 <?php echo csrf_field(); ?>
                                                 <input type="hidden" name="action" value="delete_template">
+                                                <input type="hidden" name="delete_template_id" value="<?php echo $tpl['id']; ?>">
                                                 <input type="hidden" name="delete_name" value="<?php echo htmlspecialchars($tpl['template_name']); ?>">
+                                                <input type="hidden" name="sender_account_id" value="<?php echo $sId; ?>">
                                                 <button type="submit" class="btn btn-sm btn-danger" style="padding:4px 8px; border-radius:6px; font-size:0.75rem; background:#fee2e2; border-color:#fecaca; color:#b91c1c;"><i class="fas fa-trash"></i> Delete</button>
                                             </form>
                                         <?php else: ?>
-                                            <a href="?edit_id=<?php echo $tpl['id']; ?>" class="btn btn-sm btn-outline" style="padding:4px 8px; border-radius:6px; font-size:0.75rem; color:#4f46e5; border-color:#c7d2fe; background:#eef2ff; text-decoration:none;"><i class="fas fa-route"></i> Routing</a>
+                                            <a href="?edit_id=<?php echo $tpl['id']; ?>&sender_account_id=<?php echo $sId; ?>" class="btn btn-sm btn-outline" style="padding:4px 8px; border-radius:6px; font-size:0.75rem; color:#4f46e5; border-color:#c7d2fe; background:#eef2ff; text-decoration:none;"><i class="fas fa-route"></i> Routing</a>
                                             
-                                            <button class="btn btn-sm btn-outline" onclick="openVisualPreview(<?php echo htmlspecialchars(json_encode($tpl['template_name'])); ?>, <?php echo htmlspecialchars(json_encode($meta)); ?>)" style="padding:4px 8px; border-radius:6px; font-size:0.75rem;"><i class="fas fa-eye"></i> Preview</button>
+                                            <button class="btn btn-sm btn-outline" onclick="openVisualPreview(<?php echo htmlspecialchars(json_encode($tpl['template_name'])); ?>, <?php echo htmlspecialchars(json_encode($meta)); ?>, <?php echo htmlspecialchars(json_encode($sId === 3 ? 'PEPP Updates' : 'PEPP Learning')); ?>, <?php echo htmlspecialchars(json_encode($tpl['waba_id'])); ?>, <?php echo htmlspecialchars(json_encode(strtoupper($tpl['category']))); ?>, <?php echo htmlspecialchars(json_encode($tpl['language'])); ?>, <?php echo htmlspecialchars(json_encode($statusLabel)); ?>)" style="padding:4px 8px; border-radius:6px; font-size:0.75rem;"><i class="fas fa-eye"></i> Preview</button>
                                             
                                             <form method="POST" onsubmit="return confirm('This will request deletion of the WhatsApp template from Meta. Existing historical communication records will not be deleted. Continue?');" style="display:inline-block; margin:0;">
                                                 <?php echo csrf_field(); ?>
                                                 <input type="hidden" name="action" value="delete_template">
+                                                <input type="hidden" name="delete_template_id" value="<?php echo $tpl['id']; ?>">
                                                 <input type="hidden" name="delete_name" value="<?php echo htmlspecialchars($tpl['template_name']); ?>">
+                                                <input type="hidden" name="sender_account_id" value="<?php echo $sId; ?>">
                                                 <button type="submit" class="btn btn-sm btn-danger" style="padding:4px 8px; border-radius:6px; font-size:0.75rem; background:#fee2e2; border-color:#fecaca; color:#b91c1c;"><i class="fas fa-trash"></i> Delete</button>
                                             </form>
                                         <?php endif; ?>
@@ -1036,6 +1234,20 @@ include 'includes/admin_nav.php';
                             </div>
                         <?php endif; ?>
                         
+                        <!-- Sender Account Selector in Builder -->
+                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:14px 16px; margin-bottom:16px;">
+                            <label style="display:block; font-size:0.8rem; font-weight:700; color:#1e293b; margin-bottom:6px;">
+                                WhatsApp Sender Account <span style="color:#ef4444;">*</span>
+                            </label>
+                            <select name="sender_account_id" id="sel-create-sender" class="form-control" onchange="onSenderAccountChange(this.value)">
+                                <option value="3" <?php echo ($selectedSenderId === 3) ? 'selected' : ''; ?>>PEPP Updates (+91 79943 04400 &bull; Account 3)</option>
+                                <option value="1" <?php echo ($selectedSenderId === 1) ? 'selected' : ''; ?>>PEPP Learning (+91 62825 63209 &bull; Account 1)</option>
+                            </select>
+                            <div id="sender-dest-info" style="font-size:0.75rem; color:#475569; margin-top:6px;">
+                                Destination: <strong id="dest-sender-name"><?php echo htmlspecialchars($selectedAccount['display_name']); ?></strong> &bull; WABA: <code id="dest-waba-code" style="background:#e2e8f0; padding:2px 6px; border-radius:4px; font-weight:700;"><?php echo htmlspecialchars($resolvedWabaId); ?></code>
+                            </div>
+                        </div>
+
                         <div style="<?php echo $isRoutingMode ? 'pointer-events:none; opacity:0.65;' : ''; ?>">
                         
                         <div style="margin-bottom:16px;">
@@ -1351,15 +1563,17 @@ include 'includes/admin_nav.php';
 <div id="preview-modal" style="display:none; position:fixed; z-index:9999; left:0; top:0; width:100%; height:100%; overflow:auto; background-color:rgba(0,0,0,0.5); justify-content:center; align-items:center; backdrop-filter:blur(3px);">
     <div style="background-color:#fff; border-radius:16px; max-width:460px; width:90%; padding:20px; box-shadow:0 10px 40px rgba(0,0,0,0.15); position:relative;">
         <span onclick="closePreviewModal()" style="position:absolute; right:15px; top:12px; cursor:pointer; font-size:1.6rem; color:#94a3b8; font-weight:700;">&times;</span>
-        <h4 id="modal-title" style="margin-top:0; margin-bottom:15px; font-weight:700; color:#1e293b; font-size:1.05rem;">Template Inspection</h4>
+        <h4 id="modal-title" style="margin-top:0; margin-bottom:8px; font-weight:700; color:#1e293b; font-size:1.05rem;">Template Inspection</h4>
         
+        <div id="modal-badge-bar" style="display:flex; gap:8px; align-items:center; margin-bottom:12px; font-size:0.75rem; flex-wrap:wrap;"></div>
+
         <!-- Mock Phone wrapper inside modal -->
         <div class="whatsapp-chat-simulator">
             <div class="whatsapp-chat-header">
-                <div class="whatsapp-chat-avatar">P</div>
+                <div class="whatsapp-chat-avatar" id="modal-avatar">P</div>
                 <div>
-                    <div style="font-weight:700; font-size:0.85rem;">PEPP Learning</div>
-                    <div style="font-size:0.65rem; opacity:0.8;">Meta Official Business API Channel</div>
+                    <div style="font-weight:700; font-size:0.85rem;" id="modal-sender-name">PEPP Updates</div>
+                    <div style="font-size:0.65rem; opacity:0.8;" id="modal-sender-meta">Meta Official Business API Channel</div>
                 </div>
             </div>
             <div class="whatsapp-chat-body" style="min-height:240px; padding:16px;">
@@ -1737,8 +1951,38 @@ function updatePreview() {
     }
 }
 
-function openVisualPreview(tplName, meta) {
+function onSenderAccountChange(senderId) {
+    senderId = parseInt(senderId, 10);
+    const destName = document.getElementById('dest-sender-name');
+    const destWaba = document.getElementById('dest-waba-code');
+    if (senderId === 1) {
+        if (destName) destName.innerText = 'PEPP Learning';
+        if (destWaba) destWaba.innerText = '1410328164305566';
+    } else {
+        if (destName) destName.innerText = 'PEPP Updates';
+        if (destWaba) destWaba.innerText = '1099020233033644';
+    }
+}
+
+function openVisualPreview(tplName, meta, senderLabel, wabaId, category, lang, statusLabel) {
     document.getElementById('modal-title').innerText = "Inspector: " + tplName;
+    const sName = senderLabel || 'WhatsApp Sender';
+    const sNameEl = document.getElementById('modal-sender-name');
+    const sMetaEl = document.getElementById('modal-sender-meta');
+    const sAvEl = document.getElementById('modal-avatar');
+    if (sNameEl) sNameEl.innerText = sName;
+    if (sMetaEl) sMetaEl.innerText = 'WABA: ' + (wabaId || 'Meta Channel');
+    if (sAvEl) sAvEl.innerText = sName.charAt(0);
+    
+    const badgeBar = document.getElementById('modal-badge-bar');
+    if (badgeBar) {
+        badgeBar.innerHTML = `
+            <span class="badge" style="background:#e0e7ff; color:#3730a3; font-weight:700; font-size:0.7rem;"><i class="fab fa-whatsapp"></i> ${sName}</span>
+            <span class="badge" style="background:#f1f5f9; color:#475569; font-weight:700; font-size:0.7rem;">${category || 'MARKETING'}</span>
+            <span class="badge" style="background:#f1f5f9; color:#475569; font-weight:700; font-size:0.7rem;">${lang || 'en'}</span>
+            <span class="badge" style="background:#ecfdf5; color:#065f46; font-weight:700; font-size:0.7rem;">${statusLabel || 'APPROVED'}</span>
+        `;
+    }
     
     // Header Media
     const headerType = meta.header_type || 'NONE';
