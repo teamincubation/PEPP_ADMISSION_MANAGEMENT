@@ -7,6 +7,7 @@ require_once 'includes/auth.php';
 require_once 'config/database.php';
 require_once 'includes/communication/WhatsAppAccountResolver.php';
 require_once 'includes/communication/CampaignConfig.php';
+require_once 'includes/communication/ContactListParser.php';
 require_permission('communication');
 
 $active_page = 'communication';
@@ -30,7 +31,183 @@ function clean_wa_phone($num) {
    ───────────────────────────────────────────────────────────────────────────── */
 if (isset($_GET['action'])) {
     $action = $_GET['action'];
-    
+
+    // 0a. Download Sample Contact List CSV
+    if ($action === 'download_sample_csv') {
+        header('Content-Type: text/csv; charset=UTF-8');
+        header('Content-Disposition: attachment; filename="sample_campaign_contacts.csv"');
+        header('Cache-Control: max-age=0');
+        echo ContactListParser::generateSampleCsv();
+        exit;
+    }
+
+    // 0b. Download Sample Contact List Excel (.xlsx)
+    if ($action === 'download_sample_excel') {
+        $tempXlsx = tempnam(sys_get_temp_dir(), 'pepp_sample_') . '.xlsx';
+        if (ContactListParser::generateSampleXlsx($tempXlsx) && file_exists($tempXlsx)) {
+            header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            header('Content-Disposition: attachment; filename="sample_campaign_contacts.xlsx"');
+            header('Content-Length: ' . filesize($tempXlsx));
+            header('Cache-Control: max-age=0');
+            readfile($tempXlsx);
+            @unlink($tempXlsx);
+        } else {
+            echo "Unable to generate Excel template.";
+        }
+        exit;
+    }
+
+    // 0c. Upload and Parse Contact List (Excel / CSV)
+    if ($action === 'ajax_upload_contact_list') {
+        header('Content-Type: application/json');
+
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            echo json_encode(['success' => false, 'message' => 'Invalid request method.']);
+            exit;
+        }
+
+        if (empty($_FILES['contact_file']) || $_FILES['contact_file']['error'] !== UPLOAD_ERR_OK) {
+            $uploadErrors = [
+                UPLOAD_ERR_INI_SIZE => 'File exceeds server upload_max_filesize limit.',
+                UPLOAD_ERR_FORM_SIZE => 'File exceeds form max size limit.',
+                UPLOAD_ERR_PARTIAL => 'File upload was only partially completed.',
+                UPLOAD_ERR_NO_FILE => 'No file was uploaded. Please choose a file.',
+                UPLOAD_ERR_NO_TMP_DIR => 'Missing temporary folder on server.',
+                UPLOAD_ERR_CANT_WRITE => 'Failed to write file to disk.',
+                UPLOAD_ERR_EXTENSION => 'File upload stopped by PHP extension.'
+            ];
+            $errCode = $_FILES['contact_file']['error'] ?? UPLOAD_ERR_NO_FILE;
+            $msg = $uploadErrors[$errCode] ?? 'Upload failed.';
+            echo json_encode(['success' => false, 'message' => $msg]);
+            exit;
+        }
+
+        $file = $_FILES['contact_file'];
+        $defaultCountry = trim($_POST['default_country'] ?? '91') ?: '91';
+        $selectedPhoneCol = !empty($_POST['phone_column']) ? trim($_POST['phone_column']) : null;
+
+        $parseResult = ContactListParser::parseFile(
+            $file['tmp_name'],
+            $file['name'],
+            $defaultCountry,
+            $selectedPhoneCol
+        );
+
+        if (!$parseResult['success']) {
+            echo json_encode(['success' => false, 'message' => $parseResult['error']]);
+            exit;
+        }
+
+        // Store parsed data in session
+        if (session_status() === PHP_SESSION_NONE) {
+            session_start();
+        }
+
+        $uploadToken = bin2hex(random_bytes(16));
+        $_SESSION['campaign_upload_data'] = [
+            'token' => $uploadToken,
+            'file_name' => $parseResult['file_name'],
+            'headers' => $parseResult['headers'],
+            'detected_phone_col' => $parseResult['detected_phone_col'],
+            'detected_country_col' => $parseResult['detected_country_col'],
+            'default_country' => $defaultCountry,
+            'total_rows' => $parseResult['total_rows'],
+            'valid_count' => $parseResult['valid_count'],
+            'duplicate_count' => $parseResult['duplicate_count'],
+            'invalid_count' => $parseResult['invalid_count'],
+            'empty_count' => $parseResult['empty_count'],
+            'preview_rows' => $parseResult['preview_rows'],
+            'valid_recipients' => $parseResult['valid_recipients'],
+            'uploaded_at' => time()
+        ];
+
+        // Return first 50 rows for initial client preview
+        $previewPage = array_slice($parseResult['preview_rows'], 0, 50);
+
+        echo json_encode([
+            'success' => true,
+            'token' => $uploadToken,
+            'file_name' => $parseResult['file_name'],
+            'headers' => $parseResult['headers'],
+            'detected_phone_col' => $parseResult['detected_phone_col'],
+            'phone_candidates' => $parseResult['phone_candidates'],
+            'is_ambiguous' => $parseResult['is_ambiguous'],
+            'default_country' => $defaultCountry,
+            'total_rows' => $parseResult['total_rows'],
+            'valid_count' => $parseResult['valid_count'],
+            'duplicate_count' => $parseResult['duplicate_count'],
+            'invalid_count' => $parseResult['invalid_count'],
+            'empty_count' => $parseResult['empty_count'],
+            'final_recipients_count' => $parseResult['valid_count'],
+            'preview_rows' => $previewPage,
+            'total_preview_count' => count($parseResult['preview_rows'])
+        ]);
+        exit;
+    }
+
+    // 0d. Server-side Paginated Preview for Uploaded Contacts
+    if ($action === 'ajax_preview_uploaded_contacts') {
+        header('Content-Type: application/json');
+        if (session_status() === PHP_SESSION_NONE) {
+            session_start();
+        }
+
+        $uploadData = $_SESSION['campaign_upload_data'] ?? null;
+        if (!$uploadData || empty($uploadData['preview_rows'])) {
+            echo json_encode(['success' => false, 'message' => 'No uploaded contacts found. Please upload a file first.']);
+            exit;
+        }
+
+        $allRows = $uploadData['preview_rows'];
+        $filter = strtolower(trim($_REQUEST['filter'] ?? 'all')); // all | ready | duplicate | invalid
+        $search = strtolower(trim($_REQUEST['search'] ?? ''));
+        $page = max(1, (int)($_REQUEST['page'] ?? 1));
+        $perPage = max(10, min(100, (int)($_REQUEST['per_page'] ?? 25)));
+
+        $filtered = [];
+        foreach ($allRows as $r) {
+            // Filter by status
+            if ($filter === 'ready' && $r['status'] !== 'READY') continue;
+            if ($filter === 'duplicate' && $r['status'] !== 'DUPLICATE') continue;
+            if ($filter === 'invalid' && $r['status'] !== 'INVALID') continue;
+
+            // Search filter
+            if ($search !== '') {
+                $match = false;
+                if (stripos((string)$r['phone'], $search) !== false || stripos((string)$r['raw_phone'], $search) !== false) {
+                    $match = true;
+                } else {
+                    foreach ($r['data'] as $v) {
+                        if (stripos((string)$v, $search) !== false) {
+                            $match = true;
+                            break;
+                        }
+                    }
+                }
+                if (!$match) continue;
+            }
+
+            $filtered[] = $r;
+        }
+
+        $totalFiltered = count($filtered);
+        $totalPages = max(1, ceil($totalFiltered / $perPage));
+        $page = min($page, $totalPages);
+        $offset = ($page - 1) * $perPage;
+        $pageRows = array_slice($filtered, $offset, $perPage);
+
+        echo json_encode([
+            'success' => true,
+            'page' => $page,
+            'per_page' => $perPage,
+            'total_pages' => $totalPages,
+            'total_filtered' => $totalFiltered,
+            'rows' => $pageRows,
+            'headers' => $uploadData['headers'] ?? []
+        ]);
+        exit;
+    }
+
     // 0. Download Campaign Report (CSV/Excel)
     if ($action === 'download_report') {
         $id = (int)$_GET['campaign_id'];
@@ -267,6 +444,55 @@ if (isset($_GET['action'])) {
     // 2. AJAX Recipient Preview Calculator
     if ($action === 'ajax_preview_audience') {
         $targetAudience = trim($_REQUEST['target_audience'] ?? $_POST['target_audience'] ?? 'leads');
+
+        if ($targetAudience === 'upload') {
+            if (session_status() === PHP_SESSION_NONE) {
+                session_start();
+            }
+            $uploadData = $_SESSION['campaign_upload_data'] ?? null;
+            if (!$uploadData || empty($uploadData['valid_recipients'])) {
+                echo json_encode([
+                    'success' => true,
+                    'total_matching' => 0,
+                    'eligible_count' => 0,
+                    'duplicates' => 0,
+                    'opted_out' => 0,
+                    'invalid' => 0,
+                    'estimated_time' => 'No contacts uploaded',
+                    'recipients' => []
+                ]);
+                exit;
+            }
+
+            $eligibleRecipients = [];
+            foreach (array_slice($uploadData['valid_recipients'], 0, 100) as $vr) {
+                $eligibleRecipients[] = [
+                    'id' => $vr['row_num'],
+                    'name' => $vr['name'] ?: 'Contact',
+                    'phone' => $vr['phone'],
+                    'raw_phone' => $vr['phone'],
+                    'course' => $vr['data']['Course'] ?? ($vr['data']['course'] ?? '-'),
+                    'status' => 'Ready',
+                    'assigned' => 'Uploaded List',
+                    'data' => $vr['data']
+                ];
+            }
+
+            $est = CampaignConfig::estimateProcessing($pdo, $uploadData['valid_count']);
+
+            echo json_encode([
+                'success' => true,
+                'total_matching' => $uploadData['total_rows'],
+                'eligible_count' => $uploadData['valid_count'],
+                'duplicates' => $uploadData['duplicate_count'],
+                'opted_out' => 0,
+                'invalid' => $uploadData['invalid_count'],
+                'estimated_time' => $est['label'],
+                'estimated_details' => $est,
+                'recipients' => $eligibleRecipients
+            ]);
+            exit;
+        }
 
         if ($targetAudience === 'students') {
             $studentId = trim($_REQUEST['student_id'] ?? $_POST['student_id'] ?? '');
@@ -715,16 +941,70 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     $varMappings = $_POST['vars'] ?? [];
                     $staticVals = $_POST['static_vars'] ?? [];
 
-                    // 3. Target Audience Segmentation (Leads vs Students)
+                    // 3. Target Audience Segmentation (Leads vs Students vs Upload)
                     $targetAudience = trim($_POST['target_audience'] ?? 'leads');
-                    if (!in_array($targetAudience, ['leads', 'students'], true)) {
+                    if (!in_array($targetAudience, ['leads', 'students', 'upload'], true)) {
                         $targetAudience = 'leads';
                     }
 
                     $recipients = [];
                     $segmentCriteria = [];
 
-                    if ($targetAudience === 'students') {
+                    if ($targetAudience === 'upload') {
+                        if (session_status() === PHP_SESSION_NONE) {
+                            session_start();
+                        }
+                        $uploadData = $_SESSION['campaign_upload_data'] ?? null;
+
+                        // Fallback: If session data missing but file was submitted directly in form
+                        if ((!$uploadData || empty($uploadData['valid_recipients'])) && !empty($_FILES['contact_file']) && $_FILES['contact_file']['error'] === UPLOAD_ERR_OK) {
+                            $file = $_FILES['contact_file'];
+                            $defaultCountry = trim($_POST['upload_default_country'] ?? '91') ?: '91';
+                            $selectedPhoneCol = !empty($_POST['upload_phone_column']) ? trim($_POST['upload_phone_column']) : null;
+                            $parseRes = ContactListParser::parseFile($file['tmp_name'], $file['name'], $defaultCountry, $selectedPhoneCol);
+                            if ($parseRes['success']) {
+                                $uploadData = $parseRes;
+                            }
+                        }
+
+                        if (!$uploadData || empty($uploadData['valid_recipients'])) {
+                            $error_message = 'No valid uploaded contacts found. Please upload a contact list file.';
+                        } else {
+                            $uploadedRecipientVars = [];
+                            foreach ($uploadData['valid_recipients'] as $vr) {
+                                $recipients[] = [
+                                    'lead_id' => null,
+                                    'user_id' => null,
+                                    'name' => $vr['name'] ?: 'Contact',
+                                    'phone' => $vr['phone'],
+                                    'course' => $vr['data']['Course'] ?? ($vr['data']['course'] ?? ''),
+                                    'status' => 'active',
+                                    'raw_data' => $vr['data']
+                                ];
+                                $uploadedRecipientVars[$vr['phone']] = $vr['data'];
+                            }
+
+                            $segmentCriteria = [
+                                'target_audience' => 'upload',
+                                'file_name' => $uploadData['file_name'] ?? 'contact_list.csv',
+                                'default_country' => $uploadData['default_country'] ?? '91',
+                                'phone_column' => $uploadData['detected_phone_col'] ?? '',
+                                'var_mappings' => $varMappings,
+                                'static_vals' => $staticVals,
+                                'header_media' => $headerMediaUrl,
+                                'sender_account_id' => (int)$senderAcc['id'],
+                                'sender_key' => $senderAcc['sender_key'],
+                                'sender_name' => $senderAcc['display_name'],
+                                'total_imported' => $uploadData['total_rows'] ?? count($recipients),
+                                'duplicates_count' => $uploadData['duplicate_count'] ?? 0,
+                                'invalid_count' => $uploadData['invalid_count'] ?? 0,
+                                'uploaded_recipient_vars' => $uploadedRecipientVars
+                            ];
+
+                            // Privacy: Clear temporary session upload data after campaign configuration
+                            unset($_SESSION['campaign_upload_data']);
+                        }
+                    } elseif ($targetAudience === 'students') {
                         $selectedStudentId = trim($_POST['selected_student_id'] ?? '');
                         if (empty($selectedStudentId)) {
                             $error_message = 'Please search and select a student from the Students Database.';
@@ -1450,6 +1730,7 @@ include 'includes/admin_nav.php';
                 <div style="display:flex; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; margin-bottom:16px;">
                     <button type="button" onclick="switchAudience('leads')" id="btn-tab-leads" style="flex:1; padding:10px; border:none; outline:none; font-weight:700; cursor:pointer; font-size:0.8rem; background:#f1f5f9; color:#475569;">Leads Database</button>
                     <button type="button" onclick="switchAudience('students')" id="btn-tab-students" style="flex:1; padding:10px; border:none; outline:none; font-weight:700; cursor:pointer; font-size:0.8rem; background:#fff; color:#64748b; border-left:1px solid #e2e8f0;">Students Database</button>
+                    <button type="button" onclick="switchAudience('upload')" id="btn-tab-upload" style="flex:1; padding:10px; border:none; outline:none; font-weight:700; cursor:pointer; font-size:0.8rem; background:#fff; color:#64748b; border-left:1px solid #e2e8f0;"><i class="fas fa-file-excel" style="color:#10b981; margin-right:4px;"></i> Upload Contact List</button>
                 </div>
 
                 <form method="POST" id="campaign-create-form" enctype="multipart/form-data" onsubmit="return validateFormSubmit(event)">
@@ -1641,6 +1922,89 @@ include 'includes/admin_nav.php';
                                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:8px; padding-top:8px; border-top:1px dashed #a7f3d0; font-size:0.72rem;">
                                     <div><span style="color:#047857;">WhatsApp:</span> <strong id="card-student-phone" style="color:#065f46;">-</strong></div>
                                     <div><span style="color:#047857;">Course:</span> <strong id="card-student-course" style="color:#065f46;">-</strong></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Panel: Upload Contact List Selection -->
+                        <div id="panel-upload-audience" style="display:none;">
+                            <!-- Drag & Drop Zone -->
+                            <div id="upload-dropzone" style="border:2px dashed #cbd5e1; border-radius:12px; padding:20px; text-align:center; background:#f8fafc; cursor:pointer; transition:all 0.2s ease; margin-bottom:12px;" onclick="document.getElementById('inp-contact-file').click()" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDropFile(event)">
+                                <input type="file" id="inp-contact-file" name="contact_file" accept=".xlsx,.xls,.csv" style="display:none;" onchange="onContactFileSelected(this.files)">
+                                <div style="font-size:2rem; color:#8b5cf6; margin-bottom:8px;">
+                                    <i class="fas fa-cloud-arrow-up"></i>
+                                </div>
+                                <div style="font-size:0.85rem; font-weight:700; color:#1e293b;">
+                                    Drop Excel/CSV here or <span style="color:#7c3aed; text-decoration:underline;">Browse</span>
+                                </div>
+                                <div style="font-size:0.7rem; color:#64748b; margin-top:4px;">
+                                    Supported: Excel (.xlsx) and CSV (.csv) &bull; Legacy .xls (HTML table) &bull; Max 10MB
+                                </div>
+                                <div id="upload-spinner" style="display:none; margin-top:10px; color:#7c3aed; font-size:0.8rem; font-weight:700;">
+                                    <i class="fas fa-circle-notch fa-spin"></i> Parsing spreadsheet server-side...
+                                </div>
+                            </div>
+
+                            <!-- Sample download buttons -->
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; padding:8px 12px; background:#f1f5f9; border-radius:8px; font-size:0.72rem;">
+                                <span style="color:#475569; font-weight:600;"><i class="fas fa-download" style="color:#6366f1; margin-right:4px;"></i> Templates:</span>
+                                <div style="display:flex; gap:8px;">
+                                    <a href="communication-campaigns.php?action=download_sample_csv" class="btn btn-sm btn-outline" style="padding:3px 8px; font-size:0.68rem; text-decoration:none;" download>
+                                        <i class="fas fa-file-csv"></i> Download Sample CSV
+                                    </a>
+                                    <a href="communication-campaigns.php?action=download_sample_excel" class="btn btn-sm btn-outline" style="padding:3px 8px; font-size:0.68rem; text-decoration:none;" download>
+                                        <i class="fas fa-file-excel"></i> Download Excel Template
+                                    </a>
+                                </div>
+                            </div>
+
+                            <!-- Country / Default Country Selector -->
+                            <div style="margin-bottom:12px; border:1px solid #e2e8f0; border-radius:8px; padding:10px; background:#fff;">
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                                    <label style="font-size:0.75rem; font-weight:700; color:#334155;">Country / Default Country</label>
+                                    <span class="badge blue" style="font-size:0.65rem;">Configurable</span>
+                                </div>
+                                <select id="sel-upload-country" name="upload_default_country" class="form-control" style="font-size:0.8rem; border-radius:6px;" onchange="onUploadCountryChanged()">
+                                    <option value="91" selected>India (+91)</option>
+                                    <option value="971">United Arab Emirates (+971)</option>
+                                    <option value="966">Saudi Arabia (+966)</option>
+                                    <option value="974">Qatar (+974)</option>
+                                    <option value="968">Oman (+968)</option>
+                                    <option value="965">Kuwait (+965)</option>
+                                    <option value="973">Bahrain (+973)</option>
+                                    <option value="44">United Kingdom (+44)</option>
+                                    <option value="1">United States / Canada (+1)</option>
+                                </select>
+                                <div style="font-size:0.68rem; color:#64748b; margin-top:4px;">
+                                    <i class="fas fa-circle-info" style="color:#6366f1;"></i> Numbers without a country code will be interpreted using this country.
+                                </div>
+                            </div>
+
+                            <!-- Ambiguous Phone Column Selector (if multiple detected) -->
+                            <div id="box-phone-col-select" style="display:none; margin-bottom:12px; border:1.5px solid #f59e0b; border-radius:8px; padding:10px; background:#fffbeb;">
+                                <label style="display:block; font-size:0.75rem; font-weight:700; color:#92400e; margin-bottom:4px;">
+                                    <i class="fas fa-triangle-exclamation"></i> Select WhatsApp Number Column <span style="color:#ef4444;">*</span>
+                                </label>
+                                <select id="sel-phone-col" name="upload_phone_column" class="form-control" style="font-size:0.8rem; border-radius:6px;" onchange="onPhoneColManuallySelected(this.value)">
+                                    <option value="">-- Choose WhatsApp Phone Column --</option>
+                                </select>
+                                <div style="font-size:0.68rem; color:#b45309; margin-top:4px;">
+                                    Multiple phone candidates were detected. Please explicitly choose the WhatsApp number column.
+                                </div>
+                            </div>
+
+                            <!-- Upload Result Notice Card -->
+                            <div id="upload-status-card" style="display:none; border:1px solid #cbd5e1; border-radius:8px; padding:10px 12px; background:#fff; margin-bottom:12px;">
+                                <div style="display:flex; justify-content:space-between; align-items:center;">
+                                    <span style="font-size:0.78rem; font-weight:700; color:#1e293b;"><i class="fas fa-file-circle-check" style="color:#10b981; margin-right:4px;"></i> <span id="lbl-upload-filename">-</span></span>
+                                    <button type="button" onclick="clearUploadedContactList()" style="border:none; background:#fee2e2; color:#b91c1c; border-radius:4px; padding:2px 6px; font-size:0.65rem; font-weight:700; cursor:pointer;">
+                                        <i class="fas fa-xmark"></i> Remove
+                                    </button>
+                                </div>
+                                <div style="font-size:0.7rem; color:#475569; margin-top:6px; display:flex; gap:12px; flex-wrap:wrap;">
+                                    <span>Imported: <strong id="lbl-upload-total-rows">0</strong> rows</span>
+                                    <span>Phone Column: <strong id="lbl-upload-phone-col" style="color:#059669;">-</strong></span>
+                                    <span>Country: <strong id="lbl-upload-country-badge">India (+91)</strong></span>
                                 </div>
                             </div>
                         </div>
@@ -1969,8 +2333,8 @@ include 'includes/admin_nav.php';
 
                     <!-- Split Layout: Left Table / Right visual preview -->
                     <div style="display:grid; grid-template-columns:1.8fr 1.2fr; gap:16px; align-items:start;">
-                        <!-- Preview Table -->
-                        <div style="max-height:280px; overflow-y:auto; border:1px solid #cbd5e1; border-radius:10px;">
+                        <!-- Standard Preview Table (Leads / Students) -->
+                        <div id="box-audience-standard-table" style="max-height:280px; overflow-y:auto; border:1px solid #cbd5e1; border-radius:10px;">
                             <table style="width:100%; border-collapse:collapse; font-size:0.75rem; text-align:left;">
                                 <thead style="background:#f8fafc; position:sticky; top:0; z-index:10; border-bottom:1px solid #cbd5e1;">
                                     <tr>
@@ -1982,6 +2346,43 @@ include 'includes/admin_nav.php';
                                 </thead>
                                 <tbody id="table-body-preview"></tbody>
                             </table>
+                        </div>
+
+                        <!-- Uploaded Contact List Preview Table (paginated with filters & search) -->
+                        <div id="box-audience-upload-table" style="display:none;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px; flex-wrap:wrap;">
+                                <div style="display:flex; gap:4px;" id="upload-filter-tab-buttons">
+                                    <button type="button" class="btn btn-sm btn-outline active-filter-tab" id="btn-flt-all" onclick="setUploadFilter('all')" style="font-size:0.68rem; padding:3px 8px; border-radius:6px; font-weight:700; background:#f1f5f9;">All</button>
+                                    <button type="button" class="btn btn-sm btn-outline" id="btn-flt-ready" onclick="setUploadFilter('ready')" style="font-size:0.68rem; padding:3px 8px; border-radius:6px; font-weight:700; color:#059669;">Ready</button>
+                                    <button type="button" class="btn btn-sm btn-outline" id="btn-flt-duplicate" onclick="setUploadFilter('duplicate')" style="font-size:0.68rem; padding:3px 8px; border-radius:6px; font-weight:700; color:#d97706;">Duplicates</button>
+                                    <button type="button" class="btn btn-sm btn-outline" id="btn-flt-invalid" onclick="setUploadFilter('invalid')" style="font-size:0.68rem; padding:3px 8px; border-radius:6px; font-weight:700; color:#dc2626;">Invalid</button>
+                                </div>
+                                <div style="position:relative; min-width:160px;">
+                                    <input type="text" id="inp-upload-search" placeholder="Search contacts..." class="form-control" style="font-size:0.72rem; padding:3px 8px 3px 24px !important; height:28px !important; border-radius:6px;" oninput="onUploadSearchInput(this.value)">
+                                    <i class="fas fa-magnifying-glass" style="position:absolute; left:8px; top:8px; font-size:0.68rem; color:#94a3b8;"></i>
+                                </div>
+                            </div>
+                            <div style="max-height:230px; overflow-y:auto; border:1px solid #cbd5e1; border-radius:8px;">
+                                <table style="width:100%; border-collapse:collapse; font-size:0.73rem; text-align:left;">
+                                    <thead style="background:#f8fafc; position:sticky; top:0; z-index:10; border-bottom:1px solid #cbd5e1;">
+                                        <tr>
+                                            <th style="padding:6px 8px; width:30px;">#</th>
+                                            <th style="padding:6px 8px;" title="Valid normalized international format">Normalized Phone</th>
+                                            <th style="padding:6px 8px;">Original</th>
+                                            <th style="padding:6px 8px;">Status</th>
+                                            <th style="padding:6px 8px;">Row Data</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="table-body-upload-preview"></tbody>
+                                </table>
+                            </div>
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; font-size:0.7rem; color:#64748b;">
+                                <span id="lbl-upload-page-info">Page 1 of 1</span>
+                                <div style="display:flex; gap:6px;">
+                                    <button type="button" id="btn-upload-prev" class="btn btn-sm btn-outline" onclick="changeUploadPage(-1)" style="padding:2px 8px; font-size:0.68rem;" disabled>&laquo; Prev</button>
+                                    <button type="button" id="btn-upload-next" class="btn btn-sm btn-outline" onclick="changeUploadPage(1)" style="padding:2px 8px; font-size:0.68rem;" disabled>Next &raquo;</button>
+                                </div>
+                            </div>
                         </div>
                         
                         <!-- Visual Chat preview bubble -->
@@ -2097,6 +2498,8 @@ include 'includes/admin_nav.php';
             <div style="display:flex; justify-content:space-between;"><span style="color:#64748b;">Sender Account:</span><strong id="lbl-confirm-sender" style="color:#7c3aed;">PEPP Updates</strong></div>
             <div style="display:flex; justify-content:space-between;"><span style="color:#64748b;">Recipients:</span><strong style="color:#047857;" id="lbl-confirm-recipients">0 leads</strong></div>
             <div id="row-confirm-student-detail" style="display:none; justify-content:space-between;"><span style="color:#64748b;">Selected Student:</span><strong id="lbl-confirm-student-detail" style="color:#065f46;">-</strong></div>
+            <div id="row-confirm-upload-file" style="display:none; justify-content:space-between;"><span style="color:#64748b;">Contact File:</span><strong id="lbl-confirm-upload-file" style="color:#7c3aed;">-</strong></div>
+            <div id="row-confirm-upload-stats" style="display:none; justify-content:space-between;"><span style="color:#64748b;">File Summary:</span><span id="lbl-confirm-upload-stats" style="font-size:0.75rem; color:#475569;">-</span></div>
             <div style="display:flex; justify-content:space-between;"><span style="color:#64748b;">Estimated Time:</span><strong style="color:#4f46e5;" id="lbl-confirm-time">-</strong></div>
             <div style="display:flex; justify-content:space-between;"><span style="color:#64748b;">Schedule:</span><strong id="lbl-confirm-schedule">-</strong></div>
         </div>
@@ -2155,6 +2558,16 @@ let currentSenderName = '<?php echo addslashes($isNotifConfigured ? ($notifAccou
 let selectedStudentObj = null;
 let studentSearchTimeout = null;
 
+// Upload Contact List State
+let uploadedFileHeaders = [];
+let uploadedSummaryStats = null;
+let currentUploadPhoneCol = '';
+let currentUploadFileName = '';
+let uploadPreviewPage = 1;
+let uploadPreviewFilter = 'all';
+let uploadPreviewSearch = '';
+let uploadMappingsState = {};
+
 function escapeHtml(str) {
     if (str === null || str === undefined) return '';
     return String(str)
@@ -2172,22 +2585,52 @@ function switchAudience(type) {
 
     const btnLeads = document.getElementById('btn-tab-leads');
     const btnStudents = document.getElementById('btn-tab-students');
+    const btnUpload = document.getElementById('btn-tab-upload');
     const panelLeads = document.getElementById('panel-leads-audience');
     const panelStudents = document.getElementById('panel-students-audience');
+    const panelUpload = document.getElementById('panel-upload-audience');
     const subTitle = document.getElementById('txt-audience-subtitle');
 
-    if (type === 'students') {
+    // Reset button backgrounds
+    [btnLeads, btnStudents, btnUpload].forEach(btn => {
+        if (btn) {
+            btn.style.background = '#fff';
+            btn.style.color = '#64748b';
+        }
+    });
+
+    if (panelLeads) panelLeads.style.display = 'none';
+    if (panelStudents) panelStudents.style.display = 'none';
+    if (panelUpload) panelUpload.style.display = 'none';
+
+    if (type === 'upload') {
+        if (btnUpload) {
+            btnUpload.style.background = '#f1f5f9';
+            btnUpload.style.color = '#475569';
+        }
+        if (panelUpload) panelUpload.style.display = 'block';
+        if (subTitle) subTitle.innerText = 'Upload Excel (.xlsx, .xls) or CSV contact list';
+
+        if (currentTemplateMeta) {
+            renderVariableMappingUI(currentTemplateMeta);
+        }
+
+        if (uploadedSummaryStats && uploadedSummaryStats.valid_count > 0) {
+            calculatePreview();
+        } else {
+            resetAudiencePreviewChips('Upload contact list to estimate');
+        }
+    } else if (type === 'students') {
         if (btnStudents) {
             btnStudents.style.background = '#f1f5f9';
             btnStudents.style.color = '#475569';
         }
-        if (btnLeads) {
-            btnLeads.style.background = '#fff';
-            btnLeads.style.color = '#64748b';
-        }
         if (panelStudents) panelStudents.style.display = 'block';
-        if (panelLeads) panelLeads.style.display = 'none';
         if (subTitle) subTitle.innerText = 'Select student from database';
+
+        if (currentTemplateMeta) {
+            renderVariableMappingUI(currentTemplateMeta);
+        }
 
         if (selectedStudentObj) {
             calculatePreview();
@@ -2199,16 +2642,188 @@ function switchAudience(type) {
             btnLeads.style.background = '#f1f5f9';
             btnLeads.style.color = '#475569';
         }
-        if (btnStudents) {
-            btnStudents.style.background = '#fff';
-            btnStudents.style.color = '#64748b';
-        }
         if (panelLeads) panelLeads.style.display = 'block';
-        if (panelStudents) panelStudents.style.display = 'none';
         if (subTitle) subTitle.innerText = 'Segment leads database';
+
+        if (currentTemplateMeta) {
+            renderVariableMappingUI(currentTemplateMeta);
+        }
 
         onFilterChanged();
     }
+}
+
+/* ── Upload Contact List Drag & Drop and Upload Event Handlers ── */
+function onDragOver(e) {
+    e.preventDefault();
+    const zone = document.getElementById('upload-dropzone');
+    if (zone) {
+        zone.style.borderColor = '#7c3aed';
+        zone.style.background = '#f5f3ff';
+    }
+}
+
+function onDragLeave(e) {
+    e.preventDefault();
+    const zone = document.getElementById('upload-dropzone');
+    if (zone) {
+        zone.style.borderColor = '#cbd5e1';
+        zone.style.background = '#f8fafc';
+    }
+}
+
+function onDropFile(e) {
+    e.preventDefault();
+    onDragLeave(e);
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        onContactFileSelected(e.dataTransfer.files);
+    }
+}
+
+function onContactFileSelected(files) {
+    if (!files || files.length === 0) return;
+    const file = files[0];
+    const allowedExts = ['xlsx', 'xls', 'csv'];
+    const fileExt = file.name.split('.').pop().toLowerCase();
+    if (!allowedExts.includes(fileExt)) {
+        alert('Unsupported file type. Please upload an Excel (.xlsx, .xls) or CSV (.csv) file.');
+        return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+        alert('File size exceeds the 10MB limit. Please upload a smaller file.');
+        return;
+    }
+
+    const spinner = document.getElementById('upload-spinner');
+    if (spinner) spinner.style.display = 'block';
+
+    const formData = new FormData();
+    formData.append('contact_file', file);
+    const defaultCountry = document.getElementById('sel-upload-country') ? document.getElementById('sel-upload-country').value : '91';
+    formData.append('default_country', defaultCountry);
+
+    const selPhone = document.getElementById('sel-phone-col');
+    if (selPhone && selPhone.value) {
+        formData.append('phone_column', selPhone.value);
+    }
+
+    fetch('communication-campaigns.php?action=ajax_upload_contact_list', {
+        method: 'POST',
+        body: formData
+    })
+    .then(r => r.json())
+    .then(res => {
+        if (spinner) spinner.style.display = 'none';
+        if (res.success) {
+            uploadedFileHeaders = res.headers || [];
+            uploadedSummaryStats = res;
+            currentUploadPhoneCol = res.detected_phone_col || '';
+            currentUploadFileName = res.file_name || file.name;
+
+            // Update Upload Result Notice Card
+            const statusCard = document.getElementById('upload-status-card');
+            if (statusCard) statusCard.style.display = 'block';
+            document.getElementById('lbl-upload-filename').innerText = currentUploadFileName;
+            document.getElementById('lbl-upload-total-rows').innerText = res.total_rows.toLocaleString();
+            document.getElementById('lbl-upload-phone-col').innerText = currentUploadPhoneCol || 'Auto';
+
+            const cSel = document.getElementById('sel-upload-country');
+            const cText = cSel && cSel.options[cSel.selectedIndex] ? cSel.options[cSel.selectedIndex].text : 'India (+91)';
+            document.getElementById('lbl-upload-country-badge').innerText = cText;
+
+            // Phone column selector if ambiguous or candidates available
+            const boxPhone = document.getElementById('box-phone-col-select');
+            const selectPhone = document.getElementById('sel-phone-col');
+            if (selectPhone) {
+                selectPhone.innerHTML = '<option value="">-- Choose WhatsApp Phone Column --</option>';
+                const candidates = res.phone_candidates || [];
+                uploadedFileHeaders.forEach(h => {
+                    const opt = document.createElement('option');
+                    opt.value = h;
+                    const isCandidate = candidates.includes(h);
+                    opt.innerText = h + (isCandidate ? ' (Detected Phone)' : '');
+                    if (h === currentUploadPhoneCol) opt.selected = true;
+                    selectPhone.appendChild(opt);
+                });
+            }
+            if (boxPhone) {
+                boxPhone.style.display = res.is_ambiguous ? 'block' : 'none';
+            }
+
+            // Re-render variable mapping with uploaded headers and smart suggestions
+            if (currentTemplateMeta) {
+                renderVariableMappingUI(currentTemplateMeta);
+            }
+
+            // Trigger audience calculation & preview
+            calculatePreview();
+        } else {
+            alert(res.message || 'File upload failed.');
+        }
+    })
+    .catch(err => {
+        if (spinner) spinner.style.display = 'none';
+        alert('An error occurred during file upload. Please verify file format and try again.');
+    });
+}
+
+function onPhoneColManuallySelected(col) {
+    if (!col) return;
+    currentUploadPhoneCol = col;
+    const fileInput = document.getElementById('inp-contact-file');
+    if (fileInput && fileInput.files && fileInput.files.length > 0) {
+        onContactFileSelected(fileInput.files);
+    } else {
+        calculatePreview();
+    }
+}
+
+function onUploadCountryChanged() {
+    const fileInput = document.getElementById('inp-contact-file');
+    if (fileInput && fileInput.files && fileInput.files.length > 0) {
+        onContactFileSelected(fileInput.files);
+    }
+}
+
+function clearUploadedContactList() {
+    uploadedFileHeaders = [];
+    uploadedSummaryStats = null;
+    currentUploadPhoneCol = '';
+    currentUploadFileName = '';
+    uploadMappingsState = {};
+
+    const inpFile = document.getElementById('inp-contact-file');
+    if (inpFile) inpFile.value = '';
+
+    const statusCard = document.getElementById('upload-status-card');
+    if (statusCard) statusCard.style.display = 'none';
+
+    const boxPhone = document.getElementById('box-phone-col-select');
+    if (boxPhone) boxPhone.style.display = 'none';
+
+    if (currentTemplateMeta) {
+        renderVariableMappingUI(currentTemplateMeta);
+    }
+
+    resetAudiencePreviewChips('Upload contact list to estimate');
+}
+
+function resetAudiencePreviewChips(estMsg = 'Calculate audience to estimate') {
+    calculationValid = false;
+    document.getElementById('chip-recipients-count').innerText = '0';
+    document.getElementById('chip-excluded-count').innerText = '0';
+    document.getElementById('chip-dup-count').innerText = '0';
+    document.getElementById('chip-inv-count').innerText = '0';
+    document.getElementById('chip-opt-count').innerText = '0';
+
+    document.getElementById('rev-recip-count').innerText = '0 contacts';
+    document.getElementById('rev-excluded-count').innerText = '0';
+    document.getElementById('rev-est-time').innerText = estMsg;
+
+    document.getElementById('btn-submit-campaign').disabled = true;
+
+    const previewPanel = document.getElementById('panel-audience-preview');
+    if (previewPanel) previewPanel.style.display = 'none';
 }
 
 function onStudentSearchInput(val) {
@@ -2610,6 +3225,75 @@ function onMediaFileChange(event) {
     updateVisualCardPreview();
 }
 
+function getSmartMappingSuggestion(idx, headers, bodyText) {
+    if (!headers || headers.length === 0) return { header: '', badge: 'manual', label: 'Manual' };
+
+    // Search context around {{idx}} in bodyText
+    let contextStr = '';
+    const regex = new RegExp('(?:^|[\\n.!?])([^\\n.!?]{0,40})\\{\\{' + idx + '\\}\\}([^\\n.!?]{0,40})', 'i');
+    const m = (bodyText || '').match(regex);
+    if (m) {
+        contextStr = (m[1] + ' ' + m[2]).toLowerCase();
+    }
+
+    const normHeaders = headers.map(h => ({
+        original: h,
+        clean: h.toLowerCase().replace(/[^a-z0-9]/g, '')
+    }));
+
+    // 1. Name patterns
+    if (contextStr.match(/\b(hi|hello|dear|student|candidate|name|mr|ms|mrs)\b/i) || idx === 1) {
+        const nameCandidates = ['name', 'fullname', 'studentname', 'candidatename', 'firstname', 'clientname'];
+        for (const cand of nameCandidates) {
+            const found = normHeaders.find(h => h.clean === cand || h.clean.includes(cand));
+            if (found) {
+                return { header: found.original, badge: 'auto', label: 'Auto-mapped' };
+            }
+        }
+    }
+
+    // 2. Course / Program patterns
+    if (contextStr.match(/\b(course|program|degree|admission|subject|branch)\b/i)) {
+        const courseCandidates = ['course', 'program', 'interestedcourse', 'subject', 'branch', 'degree'];
+        for (const cand of courseCandidates) {
+            const found = normHeaders.find(h => h.clean === cand || h.clean.includes(cand));
+            if (found) {
+                return { header: found.original, badge: 'auto', label: 'Auto-mapped' };
+            }
+        }
+    }
+
+    // 3. College / Institute patterns
+    if (contextStr.match(/\b(college|institute|university|school|institution)\b/i)) {
+        const instCandidates = ['college', 'institute', 'institution', 'university', 'school'];
+        for (const cand of instCandidates) {
+            const found = normHeaders.find(h => h.clean === cand || h.clean.includes(cand));
+            if (found) {
+                return { header: found.original, badge: 'auto', label: 'Auto-mapped' };
+            }
+        }
+    }
+
+    // 4. Date / Time / Exam / Batch patterns
+    if (contextStr.match(/\b(date|time|schedule|exam|batch|slot)\b/i)) {
+        const dateCandidates = ['date', 'examdate', 'time', 'batch', 'exam', 'slot'];
+        for (const cand of dateCandidates) {
+            const found = normHeaders.find(h => h.clean === cand || h.clean.includes(cand));
+            if (found) {
+                return { header: found.original, badge: 'suggested', label: 'Suggested' };
+            }
+        }
+    }
+
+    // 5. Fallback: match by variable index if available
+    const nonPhone = headers.filter(h => h !== currentUploadPhoneCol);
+    if (nonPhone.length >= idx) {
+        return { header: nonPhone[idx - 1], badge: 'suggested', label: 'Suggested' };
+    }
+
+    return { header: headers[0] || '', badge: 'manual', label: 'Manual' };
+}
+
 function renderVariableMappingUI(meta) {
     const container = document.getElementById('variable-mappings-inputs');
     const panel = document.getElementById('section-variable-mapping');
@@ -2628,29 +3312,75 @@ function renderVariableMappingUI(meta) {
     if (varIndices.length > 0) {
         if (panel) panel.style.display = 'block';
         if (noVarNotice) noVarNotice.style.display = 'none';
+
         varIndices.forEach(idx => {
             const row = document.createElement('div');
             row.style.display = 'grid';
             row.style.gridTemplateColumns = '1.2fr 2fr';
             row.style.gap = '10px';
             row.style.alignItems = 'center';
-            row.innerHTML = `
-                <span style="font-size:0.75rem; font-weight:700; color:#475569;">Variable {{${idx}}}:</span>
-                <div>
-                    <select name="vars[${idx}]" class="form-control mapping-select" data-index="${idx}" style="font-size:0.8rem; border-radius:6px; margin-bottom:4px;" onchange="toggleStaticValueInput(${idx}, this.value)" required>
-                        <option value="name">Lead/Student Name</option>
-                        <option value="interested_course">Course of Interest</option>
-                        <option value="whatsapp_number">WhatsApp Phone</option>
-                        <option value="last_institute">Last Studied Institute</option>
-                        <option value="last_course">Last Studied Course</option>
-                        <option value="status">Lead Status</option>
-                        <option value="source">Lead Source</option>
-                        <option value="assigned_to">Assigned Counselor</option>
-                        <option value="static">-- Custom Static Value --</option>
-                    </select>
-                    <input type="text" name="static_vars[${idx}]" id="inp-static-val-${idx}" class="form-control static-input" placeholder="Enter static text..." style="display:none; font-size:0.75rem; border-radius:6px;" oninput="updateVisualCardPreview()">
-                </div>
-            `;
+            row.style.padding = '6px 0';
+            row.style.borderBottom = '1px dashed #f1f5f9';
+
+            if (currentAudience === 'upload') {
+                // Determine suggestion or existing mapping
+                const existingState = uploadMappingsState[idx];
+                const suggestion = getSmartMappingSuggestion(idx, uploadedFileHeaders, bodyText);
+                const selectedVal = existingState ? existingState.val : suggestion.header;
+                const badgeType = existingState ? (existingState.source || 'manual') : suggestion.badge;
+                const badgeText = (badgeType === 'auto') ? 'Auto-mapped' : ((badgeType === 'suggested') ? 'Suggested' : 'Manual');
+                const badgeColor = (badgeType === 'auto') ? '#059669' : ((badgeType === 'suggested') ? '#2563eb' : '#64748b');
+                const badgeBg = (badgeType === 'auto') ? '#ecfdf5' : ((badgeType === 'suggested') ? '#eff6ff' : '#f1f5f9');
+
+                let optionsHtml = '';
+                if (uploadedFileHeaders.length > 0) {
+                    optionsHtml += '<optgroup label="Spreadsheet Columns">';
+                    uploadedFileHeaders.forEach(h => {
+                        const isSel = (h === selectedVal) ? 'selected' : '';
+                        optionsHtml += `<option value="${escapeHtml(h)}" ${isSel}>${escapeHtml(h)}</option>`;
+                    });
+                    optionsHtml += '</optgroup>';
+                } else {
+                    optionsHtml += '<option value="" disabled selected>-- Upload contact list to map columns --</option>';
+                }
+                optionsHtml += '<optgroup label="Custom">';
+                optionsHtml += `<option value="static" ${selectedVal === 'static' ? 'selected' : ''}>-- Custom Static Value --</option>`;
+                optionsHtml += '</optgroup>';
+
+                row.innerHTML = `
+                    <div>
+                        <span style="font-size:0.75rem; font-weight:700; color:#475569;">Variable {{${idx}}}:</span>
+                        <div id="badge-map-${idx}" style="display:inline-block; font-size:0.62rem; font-weight:700; color:${badgeColor}; background:${badgeBg}; border-radius:4px; padding:2px 6px; margin-top:2px;">
+                            ${escapeHtml(badgeText)}
+                        </div>
+                    </div>
+                    <div>
+                        <select name="vars[${idx}]" class="form-control mapping-select" data-index="${idx}" style="font-size:0.8rem; border-radius:6px; margin-bottom:4px;" onchange="onMappingChanged(${idx}, this.value)" required>
+                            ${optionsHtml}
+                        </select>
+                        <input type="text" name="static_vars[${idx}]" id="inp-static-val-${idx}" class="form-control static-input" placeholder="Enter static text..." style="display:${selectedVal === 'static' ? 'block' : 'none'}; font-size:0.75rem; border-radius:6px;" oninput="updateVisualCardPreview()">
+                    </div>
+                `;
+            } else {
+                // Standard leads / students mapping
+                row.innerHTML = `
+                    <span style="font-size:0.75rem; font-weight:700; color:#475569;">Variable {{${idx}}}:</span>
+                    <div>
+                        <select name="vars[${idx}]" class="form-control mapping-select" data-index="${idx}" style="font-size:0.8rem; border-radius:6px; margin-bottom:4px;" onchange="toggleStaticValueInput(${idx}, this.value)" required>
+                            <option value="name">Lead/Student Name</option>
+                            <option value="interested_course">Course of Interest</option>
+                            <option value="whatsapp_number">WhatsApp Phone</option>
+                            <option value="last_institute">Last Studied Institute</option>
+                            <option value="last_course">Last Studied Course</option>
+                            <option value="status">Lead Status</option>
+                            <option value="source">Lead Source</option>
+                            <option value="assigned_to">Assigned Counselor</option>
+                            <option value="static">-- Custom Static Value --</option>
+                        </select>
+                        <input type="text" name="static_vars[${idx}]" id="inp-static-val-${idx}" class="form-control static-input" placeholder="Enter static text..." style="display:none; font-size:0.75rem; border-radius:6px;" oninput="updateVisualCardPreview()">
+                    </div>
+                `;
+            }
             if (container) container.appendChild(row);
         });
     } else {
@@ -2660,6 +3390,17 @@ function renderVariableMappingUI(meta) {
             noVarNotice.innerHTML = '<i class="fas fa-circle-check" style="color:#059669; margin-right:4px;"></i> No variable mappings required for this template.';
         }
     }
+}
+
+function onMappingChanged(idx, val) {
+    const badge = document.getElementById(`badge-map-${idx}`);
+    if (badge) {
+        badge.innerText = 'Manual';
+        badge.style.color = '#64748b';
+        badge.style.background = '#f1f5f9';
+    }
+    uploadMappingsState[idx] = { val: val, source: 'manual' };
+    toggleStaticValueInput(idx, val);
 }
 
 function toggleStaticValueInput(idx, val) {
@@ -2676,6 +3417,72 @@ function toggleStaticValueInput(idx, val) {
 }
 
 function calculatePreview() {
+    if (currentAudience === 'upload') {
+        if (!uploadedSummaryStats || (uploadedSummaryStats.valid_count || 0) <= 0) {
+            alert('Please upload an Excel or CSV contact list with valid recipient phone numbers first.');
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append('target_audience', 'upload');
+
+        fetch('communication-campaigns.php?action=ajax_preview_audience', {
+            method: 'POST',
+            body: formData
+        })
+        .then(r => r.json())
+        .then(res => {
+            if (res.success) {
+                eligibleRecipientsList = res.recipients || [];
+
+                // Step 2 Summary Chips
+                document.getElementById('chip-recipients-count').innerText = res.eligible_count.toLocaleString();
+                document.getElementById('chip-excluded-count').innerText = (res.duplicates + res.opted_out + res.invalid).toLocaleString();
+                document.getElementById('chip-dup-count').innerText = res.duplicates;
+                document.getElementById('chip-inv-count').innerText = res.invalid;
+                document.getElementById('chip-opt-count').innerText = res.opted_out;
+
+                // Step 4 Review Card
+                document.getElementById('rev-recip-count').innerText = res.eligible_count.toLocaleString() + ' contacts';
+                document.getElementById('rev-excluded-count').innerText = (res.duplicates + res.opted_out + res.invalid).toLocaleString();
+                document.getElementById('rev-est-time').innerText = res.estimated_time || 'Calculating...';
+
+                // Preview Table Metrics
+                document.getElementById('lbl-matching-leads').innerText = res.total_matching.toLocaleString();
+                document.getElementById('lbl-duplicates').innerText = res.duplicates.toLocaleString();
+                document.getElementById('lbl-opted-out').innerText = res.opted_out.toLocaleString();
+                document.getElementById('lbl-invalid').innerText = res.invalid.toLocaleString();
+                document.getElementById('lbl-eligible-recipients').innerText = res.eligible_count.toLocaleString();
+
+                // Switch table views
+                const stdTable = document.getElementById('box-audience-standard-table');
+                const upTable = document.getElementById('box-audience-upload-table');
+                if (stdTable) stdTable.style.display = 'none';
+                if (upTable) upTable.style.display = 'block';
+
+                document.getElementById('panel-audience-preview').style.display = 'block';
+                fetchUploadedPreviewPage(1);
+
+                if (res.eligible_count > 0 && currentSenderConfigured) {
+                    calculationValid = true;
+                    document.getElementById('btn-submit-campaign').disabled = false;
+                } else {
+                    calculationValid = false;
+                    document.getElementById('btn-submit-campaign').disabled = true;
+                    if (!currentSenderConfigured) {
+                        alert('Selected sender account is not configured with a valid WhatsApp phone number ID. Sending is disabled.');
+                    } else if (res.eligible_count === 0) {
+                        alert('No valid deliverable recipients found in the uploaded file.');
+                    }
+                }
+                updateVisualCardPreview();
+            } else {
+                alert(res.message || 'Audience preview calculation failed.');
+            }
+        });
+        return;
+    }
+
     if (currentAudience === 'students') {
         const studentId = document.getElementById('inp-selected-student-id') ? document.getElementById('inp-selected-student-id').value.trim() : '';
         if (!studentId) {
@@ -2714,6 +3521,12 @@ function calculatePreview() {
                 document.getElementById('lbl-opted-out').innerText = res.opted_out.toLocaleString();
                 document.getElementById('lbl-invalid').innerText = res.invalid.toLocaleString();
                 document.getElementById('lbl-eligible-recipients').innerText = res.eligible_count.toLocaleString();
+
+                // Switch table views
+                const stdTable = document.getElementById('box-audience-standard-table');
+                const upTable = document.getElementById('box-audience-upload-table');
+                if (stdTable) stdTable.style.display = 'block';
+                if (upTable) upTable.style.display = 'none';
 
                 renderRecipientPreviewTable(res.recipients);
                 document.getElementById('panel-audience-preview').style.display = 'block';
@@ -2779,6 +3592,12 @@ function calculatePreview() {
             document.getElementById('lbl-invalid').innerText = res.invalid.toLocaleString();
             document.getElementById('lbl-eligible-recipients').innerText = res.eligible_count.toLocaleString();
 
+            // Switch table views
+            const stdTable = document.getElementById('box-audience-standard-table');
+            const upTable = document.getElementById('box-audience-upload-table');
+            if (stdTable) stdTable.style.display = 'block';
+            if (upTable) upTable.style.display = 'none';
+
             renderRecipientPreviewTable(res.recipients);
             document.getElementById('panel-audience-preview').style.display = 'block';
 
@@ -2799,6 +3618,121 @@ function calculatePreview() {
             alert(res.message || 'Audience preview calculation failed.');
         }
     });
+}
+
+function fetchUploadedPreviewPage(page = 1) {
+    uploadPreviewPage = Math.max(1, page);
+    const tbody = document.getElementById('table-body-upload-preview');
+    if (tbody) {
+        tbody.innerHTML = '<tr><td colspan="5" style="padding:16px; text-align:center; color:#64748b;"><i class="fas fa-circle-notch fa-spin" style="margin-right:6px;"></i> Loading preview...</td></tr>';
+    }
+
+    const params = new URLSearchParams({
+        action: 'ajax_preview_uploaded_contacts',
+        page: uploadPreviewPage,
+        per_page: 25,
+        filter: uploadPreviewFilter,
+        search: uploadPreviewSearch
+    });
+
+    fetch('communication-campaigns.php?' + params.toString())
+        .then(r => r.json())
+        .then(res => {
+            if (!tbody) return;
+            if (res.success && res.rows) {
+                renderUploadedPreviewRows(res.rows, res.start_index || ((uploadPreviewPage - 1) * 25 + 1));
+
+                // Update pagination controls
+                const pageInfo = document.getElementById('lbl-upload-page-info');
+                if (pageInfo) {
+                    pageInfo.innerText = `Showing ${res.total_filtered > 0 ? (res.start_index || 1) : 0} to ${res.end_index || 0} of ${res.total_filtered} rows (Page ${res.page} of ${res.total_pages})`;
+                }
+                const btnPrev = document.getElementById('btn-upload-prev');
+                const btnNext = document.getElementById('btn-upload-next');
+                if (btnPrev) btnPrev.disabled = (res.page <= 1);
+                if (btnNext) btnNext.disabled = (res.page >= res.total_pages);
+            } else {
+                tbody.innerHTML = `<tr><td colspan="5" style="padding:16px; text-align:center; color:#94a3b8;">${escapeHtml(res.message || 'No contacts found.')}</td></tr>`;
+            }
+        })
+        .catch(err => {
+            if (tbody) {
+                tbody.innerHTML = '<tr><td colspan="5" style="padding:16px; text-align:center; color:#ef4444;">Failed to load contacts preview.</td></tr>';
+            }
+        });
+}
+
+function renderUploadedPreviewRows(rows, startIndex = 1) {
+    const tbody = document.getElementById('table-body-upload-preview');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+
+    if (rows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" style="padding:16px; text-align:center; color:#94a3b8;">No matching rows in this filter.</td></tr>';
+        return;
+    }
+
+    rows.forEach((r, idx) => {
+        const tr = document.createElement('tr');
+        tr.style.borderBottom = '1px solid #f1f5f9';
+
+        let badgeHtml = '';
+        if (r.status === 'READY') {
+            badgeHtml = '<span class="badge green" style="font-size:0.65rem;" title="Valid normalized phone number. WhatsApp availability verified during delivery."><i class="fas fa-check"></i> Ready</span>';
+        } else if (r.status === 'DUPLICATE') {
+            badgeHtml = '<span class="badge amber" style="font-size:0.65rem;" title="' + escapeHtml(r.error || 'Duplicate number') + '"><i class="fas fa-clone"></i> Duplicate</span>';
+        } else {
+            badgeHtml = '<span class="badge red" style="font-size:0.65rem;" title="' + escapeHtml(r.error || 'Invalid phone number') + '"><i class="fas fa-xmark"></i> Invalid</span>';
+        }
+
+        // Row data summary
+        let dataEntries = [];
+        if (r.data && typeof r.data === 'object') {
+            for (const [k, v] of Object.entries(r.data)) {
+                if (v && String(v).trim()) {
+                    dataEntries.push(`<b>${escapeHtml(k)}:</b> ${escapeHtml(v)}`);
+                }
+            }
+        }
+        const dataSnippet = dataEntries.slice(0, 3).join(' • ') || '—';
+
+        tr.innerHTML = `
+            <td style="padding:6px 8px; color:#64748b; font-size:0.7rem;">${startIndex + idx}</td>
+            <td style="padding:6px 8px; font-weight:700; color:#1e293b;">${escapeHtml(r.phone || '—')}</td>
+            <td style="padding:6px 8px; color:#64748b; font-size:0.7rem;">${escapeHtml(r.raw_phone || '—')}</td>
+            <td style="padding:6px 8px;">${badgeHtml}</td>
+            <td style="padding:6px 8px; color:#475569; font-size:0.7rem; max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(dataEntries.join(' | '))}">
+                ${dataSnippet}
+            </td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+function setUploadFilter(filter) {
+    uploadPreviewFilter = filter;
+    const filterBtns = document.querySelectorAll('#upload-filter-tab-buttons button');
+    filterBtns.forEach(btn => {
+        btn.style.background = '#fff';
+    });
+    const activeBtn = document.getElementById(`btn-flt-${filter}`);
+    if (activeBtn) {
+        activeBtn.style.background = '#f1f5f9';
+    }
+    fetchUploadedPreviewPage(1);
+}
+
+let uploadSearchTimeout = null;
+function onUploadSearchInput(val) {
+    clearTimeout(uploadSearchTimeout);
+    uploadSearchTimeout = setTimeout(() => {
+        uploadPreviewSearch = val.trim();
+        fetchUploadedPreviewPage(1);
+    }, 300);
+}
+
+function changeUploadPage(delta) {
+    fetchUploadedPreviewPage(uploadPreviewPage + delta);
 }
 
 function renderRecipientPreviewTable(recipients) {
@@ -2891,9 +3825,19 @@ function updateVisualCardPreview() {
         if (fieldVal === 'static') {
             finalVal = document.getElementById(`inp-static-val-${idx}`).value || `{{${idx}}}`;
         } else {
-            // Mapping from sample lead snapshot
-            if (sampleLead) {
-                finalVal = sampleLead[fieldVal] || sampleLead.raw_lead?.[fieldVal] || `{{${idx}}}`;
+            // Mapping from sample lead snapshot or uploaded row
+            if (currentAudience === 'upload') {
+                if (sampleLead && sampleLead.data && sampleLead.data[fieldVal] !== undefined) {
+                    finalVal = sampleLead.data[fieldVal];
+                } else if (sampleLead && sampleLead[fieldVal] !== undefined) {
+                    finalVal = sampleLead[fieldVal];
+                } else {
+                    finalVal = `[${fieldVal}]`;
+                }
+            } else {
+                if (sampleLead) {
+                    finalVal = sampleLead[fieldVal] || sampleLead.raw_lead?.[fieldVal] || `{{${idx}}}`;
+                }
             }
         }
         bodyText = bodyText.split(`{{${idx}}}`).join(finalVal);
@@ -3022,7 +3966,12 @@ function validateFormSubmit(event) {
         return false;
     }
 
-    if (currentAudience === 'students') {
+    if (currentAudience === 'upload') {
+        if (!uploadedSummaryStats || (uploadedSummaryStats.valid_count || 0) <= 0) {
+            alert('Please upload an Excel or CSV contact list with at least one valid recipient before launching.');
+            return false;
+        }
+    } else if (currentAudience === 'students') {
         const studentId = document.getElementById('inp-selected-student-id') ? document.getElementById('inp-selected-student-id').value.trim() : '';
         if (!studentId) {
             alert('Please select a student from the Students Database before launching.');
@@ -3041,7 +3990,20 @@ function validateFormSubmit(event) {
     document.getElementById('lbl-confirm-sender').innerText = currentSenderName;
     document.getElementById('lbl-confirm-recipients-count').innerText = recipText;
 
-    if (currentAudience === 'students') {
+    if (currentAudience === 'upload') {
+        document.getElementById('lbl-confirm-audience-type').innerText = 'Uploaded Contact List';
+        document.getElementById('lbl-confirm-audience-type').style.color = '#7c3aed';
+        document.getElementById('lbl-confirm-recipients').innerText = recipText + ' contacts';
+        document.getElementById('modal-confirm-lead-text').innerHTML = `You are about to launch a bulk marketing campaign to <strong id="lbl-confirm-recipients-count">${escapeHtml(recipText)}</strong> uploaded contacts.`;
+        document.getElementById('row-confirm-student-detail').style.display = 'none';
+
+        document.getElementById('row-confirm-upload-file').style.display = 'flex';
+        document.getElementById('lbl-confirm-upload-file').innerText = currentUploadFileName || 'Contact List';
+        document.getElementById('row-confirm-upload-stats').style.display = 'flex';
+        const dupEx = uploadedSummaryStats ? uploadedSummaryStats.duplicate_count : 0;
+        const invEx = uploadedSummaryStats ? uploadedSummaryStats.invalid_count : 0;
+        document.getElementById('lbl-confirm-upload-stats').innerText = `${uploadedSummaryStats ? uploadedSummaryStats.total_rows : 0} rows (${dupEx} duplicates removed, ${invEx} invalid removed)`;
+    } else if (currentAudience === 'students') {
         document.getElementById('lbl-confirm-audience-type').innerText = 'Students Database';
         document.getElementById('lbl-confirm-audience-type').style.color = '#059669';
         document.getElementById('lbl-confirm-recipients').innerText = recipText + ' student';
@@ -3053,12 +4015,16 @@ function validateFormSubmit(event) {
 
         document.getElementById('lbl-confirm-student-detail').innerText = `${stuName} (${stuAdm}) — ${stuPhone}`;
         document.getElementById('row-confirm-student-detail').style.display = 'flex';
+        document.getElementById('row-confirm-upload-file').style.display = 'none';
+        document.getElementById('row-confirm-upload-stats').style.display = 'none';
     } else {
         document.getElementById('lbl-confirm-audience-type').innerText = 'Leads Database';
         document.getElementById('lbl-confirm-audience-type').style.color = '#2563eb';
         document.getElementById('lbl-confirm-recipients').innerText = recipText + ' leads';
         document.getElementById('modal-confirm-lead-text').innerHTML = `You are about to launch a bulk marketing campaign to <strong id="lbl-confirm-recipients-count">${escapeHtml(recipText)}</strong> leads.`;
         document.getElementById('row-confirm-student-detail').style.display = 'none';
+        document.getElementById('row-confirm-upload-file').style.display = 'none';
+        document.getElementById('row-confirm-upload-stats').style.display = 'none';
     }
 
     document.getElementById('lbl-confirm-time').innerText = estTime;

@@ -290,6 +290,24 @@ try {
                                     }
                                 }
 
+                                // Fallback: Resolve recipient name for uploaded contacts if empty
+                                if (empty($rec['recipient_name']) && !empty($segmentCriteria['uploaded_recipient_vars'])) {
+                                    $recPhone = (string)($rec['recipient'] ?? '');
+                                    $cleanPhone = preg_replace('/\D/', '', $recPhone);
+                                    $upVars = $segmentCriteria['uploaded_recipient_vars'][$recPhone]
+                                        ?? $segmentCriteria['uploaded_recipient_vars'][$cleanPhone]
+                                        ?? $segmentCriteria['uploaded_recipient_vars']['+' . $cleanPhone]
+                                        ?? null;
+                                    if ($upVars !== null) {
+                                        foreach (['name', 'Name', 'full_name', 'Full Name', 'student_name', 'Student Name', 'contact_name', 'Contact Name'] as $nk) {
+                                            if (!empty($upVars[$nk])) {
+                                                $rec['recipient_name'] = (string)$upVars[$nk];
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+
                                 // Variable resolution
                                 $resolvedBodyVars = [];
                                 $missingVar = null;
@@ -349,6 +367,27 @@ try {
                                             } elseif ($leadOrStudent && isset($leadOrStudent[$mappedCol])) {
                                                 $val = (string)$leadOrStudent[$mappedCol];
                                             }
+                                            // Uploaded contact list column resolution
+                                            if ($val === '' && !empty($segmentCriteria['uploaded_recipient_vars'])) {
+                                                $recPhone = (string)($rec['recipient'] ?? '');
+                                                $cleanPhone = preg_replace('/\D/', '', $recPhone);
+                                                $upVars = $segmentCriteria['uploaded_recipient_vars'][$recPhone]
+                                                    ?? $segmentCriteria['uploaded_recipient_vars'][$cleanPhone]
+                                                    ?? $segmentCriteria['uploaded_recipient_vars']['+' . $cleanPhone]
+                                                    ?? null;
+                                                if ($upVars !== null) {
+                                                    if (isset($upVars[$mappedCol])) {
+                                                        $val = (string)$upVars[$mappedCol];
+                                                    } else {
+                                                        foreach ($upVars as $uk => $uv) {
+                                                            if (strcasecmp((string)$uk, (string)$mappedCol) === 0) {
+                                                                $val = (string)$uv;
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         }
                                         // 2. Check static values
                                         if ($val === '') {
@@ -366,6 +405,26 @@ try {
                                                 $val = $leadOrStudent['interested_course'] ?? ($leadOrStudent['pepp_course'] ?? ($leadOrStudent['course'] ?? ''));
                                             } elseif ($leadOrStudent && isset($leadOrStudent[$token])) {
                                                 $val = (string)$leadOrStudent[$token];
+                                            }
+                                            if ($val === '' && !empty($segmentCriteria['uploaded_recipient_vars'])) {
+                                                $recPhone = (string)($rec['recipient'] ?? '');
+                                                $cleanPhone = preg_replace('/\D/', '', $recPhone);
+                                                $upVars = $segmentCriteria['uploaded_recipient_vars'][$recPhone]
+                                                    ?? $segmentCriteria['uploaded_recipient_vars'][$cleanPhone]
+                                                    ?? $segmentCriteria['uploaded_recipient_vars']['+' . $cleanPhone]
+                                                    ?? null;
+                                                if ($upVars !== null) {
+                                                    if (isset($upVars[$token])) {
+                                                        $val = (string)$upVars[$token];
+                                                    } else {
+                                                        foreach ($upVars as $uk => $uv) {
+                                                            if (strcasecmp((string)$uk, (string)$token) === 0) {
+                                                                $val = (string)$uv;
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
 
