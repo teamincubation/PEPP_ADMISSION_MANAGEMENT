@@ -644,6 +644,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         try {
                             $hasCols = $resolver->hasTemplateAccountColumns();
                             if ($hasCols) {
+                                $stmtFindExisting = $pdo->prepare("
+                                    SELECT id FROM communication_templates
+                                    WHERE channel = 'whatsapp'
+                                      AND sender_account_id = ?
+                                      AND (template_name = ? OR (meta_template_id IS NOT NULL AND meta_template_id = ?))
+                                    ORDER BY id ASC LIMIT 1
+                                ");
+                                $stmtUpdateInPlace = $pdo->prepare("
+                                    UPDATE communication_templates
+                                    SET waba_id = ?,
+                                        meta_template_id = ?,
+                                        template_name = ?,
+                                        language = ?,
+                                        status = ?,
+                                        category = ?,
+                                        quality_status = ?,
+                                        rejection_reason = ?,
+                                        meta_data = ?,
+                                        updated_at = NOW()
+                                    WHERE id = ?
+                                ");
                                 $stmtUpsert = $pdo->prepare("
                                     INSERT INTO communication_templates (channel, sender_account_id, waba_id, meta_template_id, template_name, language, status, category, quality_status, rejection_reason, meta_data, updated_at) 
                                     VALUES ('whatsapp', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW()) 
@@ -710,7 +731,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 ]);
 
                                 if ($hasCols) {
-                                    $stmtUpsert->execute([$syncSenderId, $syncWabaId, $tpl['id'] ?? null, $name, $lang, $status, $category, $qualityStatus, $rejectedReason, $metaData]);
+                                    $stmtFindExisting->execute([$syncSenderId, $name, $tpl['id'] ?? null]);
+                                    $existingId = $stmtFindExisting->fetchColumn();
+
+                                    if ($existingId) {
+                                        $stmtUpdateInPlace->execute([
+                                            $syncWabaId,
+                                            $tpl['id'] ?? null,
+                                            $name,
+                                            $lang,
+                                            $status,
+                                            $category,
+                                            $qualityStatus,
+                                            $rejectedReason,
+                                            $metaData,
+                                            $existingId
+                                        ]);
+                                    } else {
+                                        $stmtUpsert->execute([$syncSenderId, $syncWabaId, $tpl['id'] ?? null, $name, $lang, $status, $category, $qualityStatus, $rejectedReason, $metaData]);
+                                    }
                                 } else {
                                     $stmtUpsert->execute([$name, $lang, $status, $category, $qualityStatus, $rejectedReason, $metaData]);
                                 }
@@ -827,17 +866,19 @@ $stmtList = $pdo->prepare("SELECT * FROM communication_templates WHERE {$where_s
 $stmtList->execute($params);
 $localTemplatesRaw = $stmtList->fetchAll(PDO::FETCH_ASSOC);
 
+// Apply canonical deduplication across rows (handles en vs en_US, picking approved, rich metadata, latest ID)
+$canonicalTemplates = $resolver->canonicalizeTemplateRows($localTemplatesRaw);
+
 $localTemplates = [];
 $marketingTemplates = [];
-foreach ($localTemplatesRaw as $tRaw) {
-    $tpl = $resolver->normalizeTemplateRow($tRaw);
+foreach ($canonicalTemplates as $tpl) {
     if (!$hasCols && (int)$tpl['sender_account_id'] !== $selectedSenderId) {
         continue;
     }
     $localTemplates[] = $tpl;
-    $meta = json_decode($tpl['meta_data'], true) ?: [];
+    $meta = json_decode($tpl['meta_data'] ?? '', true) ?: [];
     // Identify as marketing if explicitly flagged in JSON or if Meta category is MARKETING
-    if (!empty($meta['is_marketing']) || strtoupper($tpl['category']) === 'MARKETING') {
+    if (!empty($meta['is_marketing']) || strtoupper($tpl['category'] ?? '') === 'MARKETING') {
         $marketingTemplates[] = $tpl;
     }
 }
@@ -846,12 +887,25 @@ foreach ($localTemplatesRaw as $tRaw) {
 $stmtApproved = $pdo->prepare("SELECT * FROM communication_templates WHERE channel = 'whatsapp' AND status = 'approved' ORDER BY template_name ASC");
 $stmtApproved->execute();
 $allApprovedRaw = $stmtApproved->fetchAll(PDO::FETCH_ASSOC);
+$canonicalApproved = $resolver->canonicalizeTemplateRows($allApprovedRaw);
 $approvedTemplates = [];
-foreach ($allApprovedRaw as $ar) {
-    $norm = $resolver->normalizeTemplateRow($ar);
+foreach ($canonicalApproved as $norm) {
     if ((int)$norm['sender_account_id'] === $selectedSenderId) {
         $approvedTemplates[] = $norm;
     }
+}
+
+// Compute deduplicated template stats per sender account
+$acc3CanonicalList = $resolver->getCanonicalTemplates(3);
+$acc3ApprovedCount = 0;
+foreach ($acc3CanonicalList as $c) {
+    if (strtolower($c['status'] ?? '') === 'approved') $acc3ApprovedCount++;
+}
+
+$acc1CanonicalList = $resolver->getCanonicalTemplates(1);
+$acc1ApprovedCount = 0;
+foreach ($acc1CanonicalList as $c) {
+    if (strtolower($c['status'] ?? '') === 'approved') $acc1ApprovedCount++;
 }
 
 include 'includes/admin_nav.php';
@@ -1019,28 +1073,37 @@ include 'includes/admin_nav.php';
         <div style="display:flex; align-items:center; gap:20px; flex-wrap:wrap;">
             <div>
                 <label style="font-size:0.75rem; font-weight:800; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:6px;">
-                    WhatsApp Sender
+                    WhatsApp Sender Scope
                 </label>
-                <div style="display:flex; gap:8px;">
-                    <a href="?sender_account_id=3" class="btn btn-sm" style="border-radius:8px; font-weight:700; padding:6px 14px; <?php echo $selectedSenderId === 3 ? 'background:#f5f3ff; color:#6d28d9; border:2px solid #7c3aed;' : 'background:#fff; color:#475569; border:1px solid #cbd5e1;'; ?>">
-                        <i class="fab fa-whatsapp"></i> PEPP Updates (Account 3)
+                <div style="display:flex; gap:10px;">
+                    <a href="?sender_account_id=3" class="btn btn-sm" style="border-radius:10px; font-weight:700; padding:8px 16px; display:inline-flex; align-items:center; gap:8px; text-decoration:none; <?php echo $selectedSenderId === 3 ? 'background:#f5f3ff; color:#6d28d9; border:2px solid #7c3aed; box-shadow:0 2px 4px rgba(124,58,237,0.15);' : 'background:#fff; color:#475569; border:1px solid #cbd5e1;'; ?>">
+                        <i class="fab fa-whatsapp" style="font-size:1rem; color:#7c3aed;"></i>
+                        <span>PEPP Updates <span style="font-size:0.75rem; opacity:0.85;">(Account 3)</span></span>
+                        <span class="badge" style="background:<?php echo $selectedSenderId === 3 ? '#7c3aed' : '#e2e8f0'; ?>; color:<?php echo $selectedSenderId === 3 ? '#fff' : '#475569'; ?>; font-size:0.7rem; padding:2px 7px; border-radius:10px;"><?php echo $acc3ApprovedCount; ?> Approved</span>
                     </a>
-                    <a href="?sender_account_id=1" class="btn btn-sm" style="border-radius:8px; font-weight:700; padding:6px 14px; <?php echo $selectedSenderId === 1 ? 'background:#ecfdf5; color:#047857; border:2px solid #059669;' : 'background:#fff; color:#475569; border:1px solid #cbd5e1;'; ?>">
-                        <i class="fab fa-whatsapp"></i> PEPP Learning (Account 1)
+                    <a href="?sender_account_id=1" class="btn btn-sm" style="border-radius:10px; font-weight:700; padding:8px 16px; display:inline-flex; align-items:center; gap:8px; text-decoration:none; <?php echo $selectedSenderId === 1 ? 'background:#ecfdf5; color:#047857; border:2px solid #059669; box-shadow:0 2px 4px rgba(5,150,105,0.15);' : 'background:#fff; color:#475569; border:1px solid #cbd5e1;'; ?>">
+                        <i class="fab fa-whatsapp" style="font-size:1rem; color:#059669;"></i>
+                        <span>PEPP Learning <span style="font-size:0.75rem; opacity:0.85;">(Account 1)</span></span>
+                        <span class="badge" style="background:<?php echo $selectedSenderId === 1 ? '#059669' : '#e2e8f0'; ?>; color:<?php echo $selectedSenderId === 1 ? '#fff' : '#475569'; ?>; font-size:0.7rem; padding:2px 7px; border-radius:10px;"><?php echo $acc1ApprovedCount; ?> Approved</span>
                     </a>
                 </div>
             </div>
             <div style="padding-left:16px; border-left:1px solid #e2e8f0;">
                 <div style="font-size:1rem; font-weight:800; color:#1e293b;">
                     <?php echo htmlspecialchars($selectedAccount['display_name']); ?>
-                    <span class="badge" style="font-size:0.7rem; font-weight:800; <?php echo $selectedSenderId === 3 ? 'background:#f5f3ff; color:#6d28d9;' : 'background:#ecfdf5; color:#047857;'; ?>">
+                    <span class="badge" style="font-size:0.7rem; font-weight:800; <?php echo $selectedSenderId === 3 ? 'background:#f5f3ff; color:#6d28d9; border:1px solid #ddd6fe;' : 'background:#ecfdf5; color:#047857; border:1px solid #a7f3d0;'; ?>">
                         Account <?php echo $selectedSenderId; ?> &bull; <?php echo htmlspecialchars($selectedAccount['sender_key']); ?>
                     </span>
+                    <span style="font-size:0.75rem; font-weight:600; color:#64748b; margin-left:6px;">
+                        <?php echo $selectedSenderId === 3 ? '(Marketing Campaigns & Bulk Broadcasts)' : '(Student Admissions & Faculty Sessions)'; ?>
+                    </span>
                 </div>
-                <div style="font-size:0.8rem; color:#475569; margin-top:2px;">
+                <div style="font-size:0.8rem; color:#475569; margin-top:3px;">
                     <i class="fab fa-whatsapp" style="color:<?php echo $selectedSenderId === 3 ? '#7c3aed' : '#059669'; ?>;"></i> <?php echo htmlspecialchars($selectedAccount['phone_number']); ?>
                     &nbsp;&bull;&nbsp;
-                    WABA: <code style="background:#f1f5f9; padding:2px 6px; border-radius:4px; font-weight:700;"><?php echo htmlspecialchars($resolvedWabaId); ?></code>
+                    WABA ID: <code style="background:#f1f5f9; padding:2px 6px; border-radius:4px; font-weight:700;"><?php echo htmlspecialchars($resolvedWabaId); ?></code>
+                    &nbsp;&bull;&nbsp;
+                    Phone Number ID: <code style="background:#f1f5f9; padding:2px 6px; border-radius:4px; font-weight:700;"><?php echo htmlspecialchars($resolvedPhoneId); ?></code>
                 </div>
             </div>
         </div>
@@ -1154,8 +1217,11 @@ include 'includes/admin_nav.php';
                             <tr style="border-bottom:1px solid #f1f5f9;">
                                 <td style="padding:14px; color:#1e293b;">
                                     <div style="font-weight:700;"><?php echo htmlspecialchars($tpl['template_name']); ?></div>
-                                    <div style="display:flex; align-items:center; gap:6px; margin-top:3px;">
+                                    <div style="display:flex; align-items:center; gap:6px; margin-top:3px; flex-wrap:wrap;">
                                         <?php echo $rowSenderBadge; ?>
+                                        <?php if (!empty($tpl['meta_template_id'])): ?>
+                                            <span class="badge" style="font-size:0.65rem; background:#f1f5f9; color:#475569; font-family:monospace;" title="Meta Template ID">Meta: <?php echo htmlspecialchars($tpl['meta_template_id']); ?></span>
+                                        <?php endif; ?>
                                         <span style="font-size:0.65rem; color:#94a3b8; font-family:monospace;">#<?php echo (int)$tpl['id']; ?></span>
                                     </div>
                                 </td>

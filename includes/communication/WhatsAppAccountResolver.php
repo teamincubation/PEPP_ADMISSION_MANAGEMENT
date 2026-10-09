@@ -118,11 +118,12 @@ class WhatsAppAccountResolver {
             return [
                 'id' => 3,
                 'sender_key' => 'notifications',
-                'phone_number_id' => '',
+                'phone_number_id' => '1293652117171674',
                 'waba_id' => '1099020233033644',
-                'display_number' => '917994304400',
+                'display_number' => '+91 79943 04400',
+                'phone_number' => '+91 79943 04400',
                 'display_name' => 'PEPP Updates',
-                'purpose' => 'Session reminders, faculty session reminders, daily task reminders and university admission notifications',
+                'purpose' => 'Session reminders, daily task reminders and university admission notifications',
                 'is_default' => 0,
                 'status' => 'active',
                 'created_at' => date('Y-m-d H:i:s'),
@@ -132,6 +133,7 @@ class WhatsAppAccountResolver {
 
         return null;
     }
+
 
     /**
      * Resolves account by Meta phone_number_id.
@@ -245,10 +247,9 @@ class WhatsAppAccountResolver {
         }
 
         // 2. Canonical event routing fallback
-        // Notifications events:
+        // Notifications events (broadcasts, learner task & session reminders, university notifications):
         $notificationsEvents = [
             'session_reminder',
-            'faculty_session_reminder',
             'daily_task_reminder',
             'university_admission_notification',
             'task_reminder',
@@ -262,7 +263,7 @@ class WhatsAppAccountResolver {
             }
         }
 
-        // All admissions/transactional events default to admissions:
+        // Faculty-session events (faculty_session_*) and admissions/transactional events default to Account 1 (PEPP Learning):
         return $this->getDefaultAccount();
     }
 
@@ -345,6 +346,12 @@ class WhatsAppAccountResolver {
         if (!$acc) {
             return null;
         }
+        if (!isset($acc['phone_number']) && isset($acc['display_number'])) {
+            $acc['phone_number'] = $acc['display_number'];
+        }
+        if (!isset($acc['display_number']) && isset($acc['phone_number'])) {
+            $acc['display_number'] = $acc['phone_number'];
+        }
         if (empty($acc['waba_id'])) {
             $senderKey = strtolower(trim((string)($acc['sender_key'] ?? '')));
             $accId = (int)($acc['id'] ?? 0);
@@ -359,14 +366,15 @@ class WhatsAppAccountResolver {
     }
 
     private function getLegacyAdmissionsAccount(): array {
-        $phoneId = $this->getLegacySetting('whatsapp_phone_id');
-        $wabaId  = $this->getLegacySetting('whatsapp_business_id') ?: '1410328164305566';
+        $phoneId = $this->getLegacySetting('whatsapp_phone_number_id') ?: $this->getLegacySetting('whatsapp_phone_id') ?: '1229563296908445';
+        $wabaId  = $this->getLegacySetting('whatsapp_business_account_id') ?: $this->getLegacySetting('whatsapp_business_id') ?: '1410328164305566';
         return [
             'id' => 1,
             'sender_key' => 'admissions',
             'phone_number_id' => $phoneId ?: '',
             'waba_id' => $wabaId,
-            'display_number' => '916282563209',
+            'display_number' => '+91 62825 63209',
+            'phone_number' => '+91 62825 63209',
             'display_name' => 'PEPP Learning',
             'purpose' => 'Admissions, student onboarding, approvals, payment receipts and 2-way inbox',
             'is_default' => 1,
@@ -585,11 +593,11 @@ class WhatsAppAccountResolver {
             $metaAcc = $meta['account_id'] ?? null;
             $metaSender = $meta['sender_key'] ?? null;
 
-            if ($metaWaba === '1099020233033644' || $metaAcc === 3 || $metaSender === 'notifications' ||
-                in_array($tplName, ['faculty_session_reminder', 'faculty_session_start', 'faculty_session_start_now', 'faculty_session_cancelled', 'faculty_session_scheduled'], true)) {
+            if ($metaWaba === '1099020233033644' || $metaAcc === 3 || $metaSender === 'notifications') {
                 $senderAccountId = 3;
                 $wabaId = '1099020233033644';
             } else {
+                // Account 1 (PEPP Learning, WABA 1410328164305566) is authoritative for admissions and all faculty_session_* templates
                 $senderAccountId = 1;
                 $wabaId = '1410328164305566';
             }
@@ -604,6 +612,214 @@ class WhatsAppAccountResolver {
         $row['meta_template_id'] = $metaTplId;
 
         return $row;
+    }
+
+    /**
+     * Resolves a WhatsApp account by sender_key or account ID (convenience alias for getAccount).
+     *
+     * @param string|int|null $identifier
+     * @return array|null
+     */
+    public function getSenderAccount($identifier = null): ?array {
+        return $this->getAccount($identifier);
+    }
+
+    /**
+     * Normalizes a language code to its core language family (e.g. en_US, en_GB -> en, es_ES -> es).
+     */
+    public static function normalizeLanguageFamily(?string $lang): string {
+        $clean = strtolower(trim((string)$lang));
+        if ($clean === '') {
+            return 'default';
+        }
+        $parts = preg_split('/[_-]/', $clean);
+        return (!empty($parts[0])) ? $parts[0] : 'default';
+    }
+
+    /**
+     * Canonicalizes a list of template rows to eliminate duplicate local records
+     * while preserving multi-account isolation and legitimate language translations.
+     *
+     * Rules:
+     * 1. Groups by sender_account_id (Account 1 and Account 3 are NEVER merged).
+     * 2. Within each sender_account_id:
+     *    - Matches by non-empty meta_template_id if identical.
+     *    - Matches by template_name + language family (e.g. 'en' vs 'en_US' duplicates).
+     *    - Legitimately distinct language translations (e.g. 'en' vs 'ml') are preserved.
+     * 3. For duplicate groups, selects the canonical record by:
+     *    - Status: approved > pending > draft > rejected > deleted.
+     *    - Has meta_template_id (+100 pts).
+     *    - Has rich body_text / components (+50 pts).
+     *    - Tie-breaker: latest updated_at, then highest ID.
+     *
+     * @param array $rows Array of raw or normalized template rows
+     * @return array Canonicalized template rows
+     */
+    public function canonicalizeTemplateRows(array $rows): array {
+        if (empty($rows)) {
+            return [];
+        }
+
+        // Group by sender_account_id first (Account 1 and Account 3 are strictly isolated!)
+        $byAccount = [];
+        foreach ($rows as $r) {
+            $norm = $this->normalizeTemplateRow($r);
+            $sId = (int)($norm['sender_account_id'] ?? 1);
+            $byAccount[$sId][] = $norm;
+        }
+
+        $result = [];
+        foreach ($byAccount as $sId => $accountRows) {
+            $groups = [];
+            foreach ($accountRows as $tpl) {
+                $metaId = !empty($tpl['meta_template_id']) ? trim((string)$tpl['meta_template_id']) : '';
+                $name = strtolower(trim((string)($tpl['template_name'] ?? '')));
+                $langFamily = self::normalizeLanguageFamily((string)($tpl['language'] ?? 'en'));
+
+                $matchedKey = null;
+                // Check if this item matches any existing group by meta_template_id or name+langFamily
+                foreach ($groups as $gKey => $gItems) {
+                    $first = $gItems[0];
+                    $firstMetaId = !empty($first['meta_template_id']) ? trim((string)$first['meta_template_id']) : '';
+                    $firstName = strtolower(trim((string)($first['template_name'] ?? '')));
+                    $firstLangFamily = self::normalizeLanguageFamily((string)($first['language'] ?? 'en'));
+
+                    if ($metaId !== '' && $firstMetaId !== '' && $metaId === $firstMetaId) {
+                        $matchedKey = $gKey;
+                        break;
+                    }
+                    if ($name !== '' && $firstName === $name && $langFamily === $firstLangFamily) {
+                        $matchedKey = $gKey;
+                        break;
+                    }
+                }
+
+                if ($matchedKey !== null) {
+                    $groups[$matchedKey][] = $tpl;
+                } else {
+                    $newKey = ($metaId !== '') ? "meta:{$metaId}" : "name:{$name}:{$langFamily}";
+                    $groups[$newKey] = [$tpl];
+                }
+            }
+
+            // For each group, select the single best canonical record
+            foreach ($groups as $gItems) {
+                if (count($gItems) === 1) {
+                    $result[] = $gItems[0];
+                    continue;
+                }
+
+                // Score candidates:
+                usort($gItems, function($a, $b) {
+                    $scoreA = 0;
+                    $scoreB = 0;
+
+                    // Status priority: approved > pending > draft > rejected > deleted
+                    $statusWeights = ['approved' => 500, 'pending' => 300, 'draft' => 200, 'rejected' => 100, 'deleted' => 0];
+                    $scoreA += $statusWeights[strtolower($a['status'] ?? '')] ?? 100;
+                    $scoreB += $statusWeights[strtolower($b['status'] ?? '')] ?? 100;
+
+                    // Has non-empty meta_template_id
+                    if (!empty($a['meta_template_id'])) $scoreA += 100;
+                    if (!empty($b['meta_template_id'])) $scoreB += 100;
+
+                    // Has non-empty body text or components
+                    $metaA = json_decode($a['meta_data'] ?? '', true) ?: [];
+                    $metaB = json_decode($b['meta_data'] ?? '', true) ?: [];
+                    if (!empty($metaA['body_text']) || !empty($metaA['components'])) $scoreA += 50;
+                    if (!empty($metaB['body_text']) || !empty($metaB['components'])) $scoreB += 50;
+
+                    if ($scoreA !== $scoreB) {
+                        return $scoreB <=> $scoreA; // higher score first
+                    }
+
+                    // Tie-breaker: latest updated_at or higher id
+                    $timeA = !empty($a['updated_at']) ? strtotime($a['updated_at']) : 0;
+                    $timeB = !empty($b['updated_at']) ? strtotime($b['updated_at']) : 0;
+                    if ($timeA !== $timeB) {
+                        return $timeB <=> $timeA;
+                    }
+
+                    return ((int)($b['id'] ?? 0)) <=> ((int)($a['id'] ?? 0));
+                });
+
+                $canonical = $gItems[0];
+                // Safely copy forward any missing metadata from siblings
+                foreach ($gItems as $sibling) {
+                    if (empty($canonical['meta_template_id']) && !empty($sibling['meta_template_id'])) {
+                        $canonical['meta_template_id'] = $sibling['meta_template_id'];
+                    }
+                    $sibMeta = json_decode($sibling['meta_data'] ?? '', true) ?: [];
+                    $canMeta = json_decode($canonical['meta_data'] ?? '', true) ?: [];
+                    if (empty($canMeta['header_media_url']) && !empty($sibMeta['header_media_url'])) {
+                        $canMeta['header_media_url'] = $sibMeta['header_media_url'];
+                        $canonical['meta_data'] = json_encode($canMeta);
+                    }
+                }
+                $result[] = $canonical;
+            }
+        }
+
+        // Sort canonical list by template_name ASC, then id ASC
+        usort($result, function($a, $b) {
+            $cmp = strcasecmp($a['template_name'] ?? '', $b['template_name'] ?? '');
+            if ($cmp !== 0) return $cmp;
+            return ((int)($a['id'] ?? 0)) <=> ((int)($b['id'] ?? 0));
+        });
+
+        return $result;
+    }
+
+    /**
+     * Fetches canonicalized templates for a given sender account.
+     */
+    public function getCanonicalTemplates(?int $senderAccountId = null, ?string $category = null, ?string $status = null): array {
+        try {
+            $where = ["channel = 'whatsapp' AND status <> 'deleted'"];
+            $params = [];
+
+            if ($this->hasTemplateAccountColumns() && $senderAccountId !== null) {
+                $where[] = "sender_account_id = ?";
+                $params[] = $senderAccountId;
+            }
+
+            if (!empty($category)) {
+                $where[] = "category = ?";
+                $params[] = $category;
+            }
+
+            if (!empty($status)) {
+                $where[] = "status = ?";
+                $params[] = $status;
+            }
+
+            $sql = "SELECT * FROM communication_templates WHERE " . implode(' AND ', $where) . " ORDER BY template_name ASC, id DESC";
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute($params);
+            $raw = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $canonical = $this->canonicalizeTemplateRows($raw);
+
+            // If senderAccountId was provided but column doesn't exist, filter by normalized sender_account_id
+            if ($senderAccountId !== null) {
+                $canonical = array_values(array_filter($canonical, function($t) use ($senderAccountId) {
+                    return (int)($t['sender_account_id'] ?? 1) === $senderAccountId;
+                }));
+            }
+
+            return $canonical;
+        } catch (Throwable $e) {
+            error_log("WhatsAppAccountResolver::getCanonicalTemplates error: " . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
+     * Returns approved MARKETING templates for a specific sender account, deduplicated.
+     */
+    public function getApprovedMarketingTemplates(int $senderAccountId): array {
+        $canonical = $this->getCanonicalTemplates($senderAccountId, 'MARKETING', 'approved');
+        return $canonical;
     }
 }
 

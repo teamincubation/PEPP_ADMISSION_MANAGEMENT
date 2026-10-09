@@ -186,9 +186,11 @@ if (isset($_GET['action'])) {
                 foreach ($components as $c) {
                     if (($c['type'] ?? '') === 'BODY') {
                         $bodyPreview = $c['text'] ?? '';
-                        break;
                     }
                 }
+            }
+            if (empty($meta['body_text']) && !empty($bodyPreview)) {
+                $meta['body_text'] = $bodyPreview;
             }
 
             echo json_encode([
@@ -1042,10 +1044,8 @@ try {
         SELECT * FROM communication_templates 
         WHERE channel='whatsapp' AND status='approved'
         ORDER BY template_name ASC
-    ")->fetchAll();
-    foreach ($rawApproved as $rTpl) {
-        $allApprovedTemplates[] = $resolver->normalizeTemplateRow($rTpl);
-    }
+    ")->fetchAll(PDO::FETCH_ASSOC);
+    $allApprovedTemplates = $resolver->canonicalizeTemplateRows($rawApproved);
 } catch (Exception $ex) {}
 
 $marketingTemplates = array_values(array_filter($allApprovedTemplates, function($t) {
@@ -1078,14 +1078,33 @@ include 'includes/admin_nav.php';
     /* Responsive Layout Grid */
     .campaign-main-layout-grid {
         display: grid;
-        grid-template-columns: minmax(320px, 360px) minmax(0, 1fr);
-        gap: 20px;
+        grid-template-columns: minmax(380px, 460px) minmax(0, 1fr);
+        gap: 24px;
         align-items: start;
     }
-    @media (max-width: 991px) {
+    @media (max-width: 1080px) {
         .campaign-main-layout-grid {
             grid-template-columns: 1fr !important;
         }
+    }
+
+    /* Template Choice Cards in Step 2 */
+    .template-choice-card {
+        border: 1.5px solid #cbd5e1;
+        border-radius: 10px;
+        padding: 10px 12px;
+        background: #fff;
+        cursor: pointer;
+        transition: all 0.15s ease;
+    }
+    .template-choice-card:hover {
+        border-color: #a78bfa;
+        background: #faf5ff;
+    }
+    .template-choice-card.selected {
+        border-color: #7c3aed !important;
+        background: #f5f3ff !important;
+        box-shadow: 0 2px 6px rgba(124, 58, 237, 0.12);
     }
 
     /* Modern Form Sectioning */
@@ -1505,7 +1524,7 @@ include 'includes/admin_nav.php';
                         </div>
                     </div>
 
-                    <!-- STEP 2 — TEMPLATE (PHASE 9 & 11) -->
+                    <!-- STEP 2 — SELECT MARKETING TEMPLATE -->
                     <div class="form-step-section">
                         <div class="form-step-header">
                             <div class="form-step-number">02</div>
@@ -1515,29 +1534,26 @@ include 'includes/admin_nav.php';
                             </div>
                         </div>
 
-                        <div style="margin-bottom:10px;">
-                            <label style="display:block; font-size:0.78rem; font-weight:700; color:#4b5563; margin-bottom:6px;">Approved Template <span style="color:#ef4444;">*</span></label>
-                            <select name="template_name" id="sel-template-name" class="form-control" onchange="onTemplateSelected(this.value, this.options[this.selectedIndex] ? this.options[this.selectedIndex].getAttribute('data-id') : '')" required>
-                                <option value="">-- Choose Approved Marketing Template --</option>
-                            </select>
-                            <div id="sender-templates-notice" style="display:none; font-size:0.74rem; color:#475569; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px; margin-top:8px;"></div>
+                        <div id="sender-templates-notice" style="display:none; font-size:0.74rem; color:#475569; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px; margin-bottom:10px;"></div>
+
+                        <!-- Fallback / programmatic select -->
+                        <select name="template_name" id="sel-template-name" class="form-control" style="display:none;" onchange="onTemplateSelected(this.value, this.options[this.selectedIndex] ? this.options[this.selectedIndex].getAttribute('data-id') : '')" required>
+                            <option value="">-- Choose Approved Marketing Template --</option>
+                        </select>
+
+                        <!-- Interactive Template Cards Grid -->
+                        <div id="tpl-cards-container" style="display:flex; flex-direction:column; gap:8px; max-height:260px; overflow-y:auto; padding-right:2px; margin-bottom:10px;">
+                            <!-- Populated dynamically via JS -->
                         </div>
 
-                        <!-- Template Preview Card -->
-                        <div id="tpl-info-card" style="display:none; border:1px solid #cbd5e1; border-radius:10px; padding:10px; background:#f8fafc; font-size:0.75rem;">
-                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; flex-wrap:wrap; gap:4px;">
-                                <strong id="tpl-card-name" style="color:#1e293b; font-size:0.8rem;">-</strong>
-                                <div style="display:flex; gap:4px; align-items:center;">
-                                    <span class="badge" id="tpl-card-sender-badge" style="background:#e0e7ff; color:#3730a3; font-size:0.6rem; font-weight:700;">PEPP Updates</span>
-                                    <span class="badge blue" style="font-size:0.6rem;">MARKETING</span>
-                                    <span class="badge gray" id="tpl-card-lang" style="font-size:0.6rem;">en</span>
-                                </div>
-                            </div>
-                            <div id="tpl-card-body-preview" style="color:#475569; font-size:0.73rem; line-height:1.35; max-height:80px; overflow-y:auto; background:#fff; border:1px solid #e2e8f0; border-radius:6px; padding:8px; white-space:pre-wrap;"></div>
+                        <!-- Selected Template Badge -->
+                        <div id="tpl-selected-badge-box" style="display:none; padding:8px 12px; background:#f5f3ff; border:1px solid #ddd6fe; border-radius:8px; font-size:0.75rem; color:#6d28d9; align-items:center; justify-content:space-between;">
+                            <span style="font-weight:700;"><i class="fas fa-circle-check" style="color:#7c3aed; margin-right:4px;"></i> Selected: <span id="tpl-selected-badge-name">-</span></span>
+                            <span class="badge" id="tpl-selected-badge-lang" style="background:#7c3aed; color:#fff; font-size:0.65rem;">en</span>
                         </div>
                     </div>
 
-                    <!-- STEP 3 — AUDIENCE -->
+                    <!-- STEP 3 — TARGET AUDIENCE -->
                     <div class="form-step-section">
                         <div class="form-step-header">
                             <div class="form-step-number">03</div>
@@ -1592,7 +1608,7 @@ include 'includes/admin_nav.php';
                                 <label style="display:block; font-size:0.75rem; font-weight:700; color:#4b5563; margin-bottom:6px;">
                                     Search Student <span style="color:#ef4444;">*</span>
                                     <span style="font-weight:400; color:#64748b; font-size:0.7rem; margin-left:4px;">(Name, Phone, or Admission No)</span>
-                                </div>
+                                </label>
                                 <div style="position:relative;">
                                     <i class="fas fa-search" style="position:absolute; left:10px; top:11px; color:#94a3b8; font-size:0.8rem;"></i>
                                     <input type="text" id="inp-student-search" class="form-control" placeholder="Search by name, phone, or admission no..." style="padding-left:32px !important; font-size:0.8rem; border-radius:8px;" oninput="onStudentSearchInput(this.value)" autocomplete="off">
@@ -1651,13 +1667,86 @@ include 'includes/admin_nav.php';
                         </button>
                     </div>
 
-                    <!-- STEP 4 — REVIEW & SEND -->
+                    <!-- STEP 4 — TEMPLATE PARAMETERS -->
                     <div class="form-step-section">
                         <div class="form-step-header">
                             <div class="form-step-number">04</div>
                             <div style="display:flex; flex-direction:column; gap:2px;">
-                                <div class="form-step-title">Review &amp; Send</div>
-                                <div style="font-size:0.7rem; color:#64748b; font-weight:500;">Summary and dispatch</div>
+                                <div class="form-step-title">Template Parameters</div>
+                                <div style="font-size:0.7rem; color:#64748b; font-weight:500;">Map template variables ({{1}}, {{2}}) &amp; media header</div>
+                            </div>
+                        </div>
+
+                        <!-- Upload Image Header Block -->
+                        <div id="section-media-header" style="display:none; border:1.5px solid #cbd5e1; border-radius:10px; padding:12px; background:#fcfcfc; margin-bottom:12px;">
+                            <label style="display:block; font-size:0.75rem; font-weight:700; color:#1e293b; margin-bottom:4px;">
+                                <i class="fas fa-file-image" style="color:#7c3aed;"></i> Header Media Attachment <span style="color:#ef4444;">*</span>
+                            </label>
+                            <input type="file" name="header_media_file" id="inp-media-file" class="form-control" style="font-size:0.75rem; height:auto !important; padding:6px 10px !important;" accept="image/*,video/mp4,application/pdf" onchange="onMediaFileChange(event)">
+                            <span style="font-size:0.68rem; color:#64748b; display:block; margin-top:3px;">Select JPG, PNG, MP4, or PDF. Max file size: 5MB.</span>
+                        </div>
+
+                        <!-- Dynamic Variables Mapping Block -->
+                        <div id="section-variable-mapping" style="display:none; margin-bottom:10px;">
+                            <label style="font-size:0.75rem; font-weight:700; color:#475569; display:block; margin-bottom:8px;">
+                                <i class="fas fa-brackets-curly" style="color:#6366f1;"></i> Variable Mappings
+                            </label>
+                            <div id="variable-mappings-inputs" style="display:flex; flex-direction:column; gap:8px;"></div>
+                        </div>
+
+                        <!-- No variables notice -->
+                        <div id="no-variables-notice" style="display:block; font-size:0.74rem; color:#64748b; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px;">
+                            <i class="fas fa-circle-info" style="color:#8b5cf6; margin-right:4px;"></i> Select a template to map parameters, or none are required.
+                        </div>
+                    </div>
+
+                    <!-- STEP 5 — REALISTIC WHATSAPP MESSAGE PREVIEW -->
+                    <div class="form-step-section">
+                        <div class="form-step-header">
+                            <div class="form-step-number">05</div>
+                            <div style="display:flex; flex-direction:column; gap:2px;">
+                                <div class="form-step-title">WhatsApp Message Preview</div>
+                                <div style="font-size:0.7rem; color:#64748b; font-weight:500;">Live rendered WhatsApp chat preview</div>
+                            </div>
+                        </div>
+
+                        <!-- Mobile Chat Simulator Box -->
+                        <div style="background:#e5ddd5; border:1px solid #cbd5e1; border-radius:12px; overflow:hidden; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; box-shadow:0 2px 6px rgba(0,0,0,0.06);">
+                            <div style="background:#075e54; color:#fff; padding:8px 12px; display:flex; align-items:center; gap:8px;">
+                                <div style="width:26px; height:26px; border-radius:50%; background:#ece5dd; color:#128c7e; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:0.75rem;">
+                                    <i class="fab fa-whatsapp"></i>
+                                </div>
+                                <div style="flex:1;">
+                                    <div style="font-weight:700; font-size:0.78rem; line-height:1.2;" id="sim-sender-name">PEPP Updates</div>
+                                    <div style="font-size:0.62rem; opacity:0.85;">Official WhatsApp Account</div>
+                                </div>
+                            </div>
+                            <div style="background-image:url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png'); background-repeat:repeat; padding:12px 10px; min-height:150px; display:flex; flex-direction:column; justify-content:center;">
+                                <div style="background:#fff; border-radius:8px 8px 8px 0; max-width:96%; padding:10px 12px; align-self:flex-start; box-shadow:0 1px 2px rgba(0,0,0,0.15); width:100%; position:relative;">
+                                    <div id="sim-box-header-media" style="display:none; background:#ece5dd; border-radius:6px; height:70px; align-items:center; justify-content:center; font-size:1.3rem; color:#94a3b8; margin-bottom:6px;">
+                                        <i class="fas fa-file-image" id="sim-box-media-icon"></i>
+                                    </div>
+                                    <div id="sim-box-header" style="font-weight:700; font-size:0.78rem; color:#111827; margin-bottom:4px; display:none;"></div>
+                                    <div id="sim-box-body" style="font-size:0.76rem; color:#1e293b; line-height:1.4; white-space:pre-wrap; word-break:break-word;">Select a template above to preview message content.</div>
+                                    <div id="sim-box-footer" style="font-size:0.65rem; color:#8696a0; margin-top:5px; display:none; border-top:1px dashed #f1f5f9; padding-top:2px;"></div>
+                                    <div style="display:flex; justify-content:flex-end; font-size:0.62rem; color:#8696a0; margin-top:4px; gap:3px; align-items:center;">
+                                        <span>Now</span>
+                                        <i class="fas fa-check-double" style="color:#53bdeb; font-size:0.65rem;"></i>
+                                    </div>
+                                    <div id="sim-box-bubble-buttons" style="display:none; flex-direction:column; gap:4px; margin-top:6px; border-top:1px solid #f1f5f9; padding-top:4px;"></div>
+                                </div>
+                                <div id="sim-box-floating-buttons" style="display:none; width:96%; align-self:flex-start; margin-top:4px; flex-direction:column; gap:4px;"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- STEP 6 — REVIEW & QUEUE CAMPAIGN -->
+                    <div class="form-step-section">
+                        <div class="form-step-header">
+                            <div class="form-step-number">06</div>
+                            <div style="display:flex; flex-direction:column; gap:2px;">
+                                <div class="form-step-title">Review &amp; Queue Campaign</div>
+                                <div style="font-size:0.7rem; color:#64748b; font-weight:500;">Authorize broadcast and queue messages</div>
                             </div>
                         </div>
 
@@ -1694,7 +1783,7 @@ include 'includes/admin_nav.php';
                             <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span style="color:#64748b;">Campaign:</span><strong id="rev-camp-name" style="color:#1e293b;">—</strong></div>
                             <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span style="color:#64748b;">Template:</span><strong id="rev-template-name" style="color:#1e293b;">None selected</strong></div>
                             <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span style="color:#64748b;">Sender:</span><strong id="rev-sender-name" style="color:#7c3aed;"><?php echo htmlspecialchars($isNotifConfigured ? ($notifAccount['display_name'] ?? 'PEPP Updates') : ($admissionsAccount['display_name'] ?? 'PEPP Learning')); ?></strong></div>
-                            <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span style="color:#64748b;">Recipients:</span><strong id="rev-recip-count" style="color:#047857;">0 leads</strong></div>
+                            <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span style="color:#64748b;">Recipients:</span><strong id="rev-recip-count" style="color:#047857;">0 recipients</strong></div>
                             <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span style="color:#64748b;">Excluded:</span><span id="rev-excluded-count" style="color:#64748b;">0</span></div>
                             <div style="border-top:1px dashed #cbd5e1; padding-top:6px; margin-top:6px;">
                                 <span style="color:#64748b; display:block; font-size:0.7rem;">Estimated processing time:</span>
@@ -1702,31 +1791,9 @@ include 'includes/admin_nav.php';
                             </div>
                         </div>
 
-                        <!-- Collapsible Advanced Settings -->
-                        <details style="margin-bottom:14px; border:1px solid #e2e8f0; border-radius:8px; padding:8px 12px; background:#fff;">
-                            <summary style="font-size:0.75rem; font-weight:700; color:#475569; cursor:pointer;">
-                                <i class="fas fa-sliders" style="margin-right:4px;"></i> Advanced Settings (Variables &amp; Media Header)
-                            </summary>
-
-                            <div style="padding-top:10px;">
-                                <!-- Upload Image Header Block -->
-                                <div id="section-media-header" style="display:none; border:1px solid #cbd5e1; border-radius:8px; padding:10px; background:#fcfcfc; margin-bottom:10px;">
-                                    <label style="display:block; font-size:0.72rem; font-weight:700; color:#1e293b; margin-bottom:4px;"><i class="fas fa-file-image" style="color:#7c3aed;"></i> Required Header Media File</label>
-                                    <input type="file" name="header_media_file" id="inp-media-file" class="form-control" style="font-size:0.75rem; height:auto !important; padding:4px 8px !important;" accept="image/*,video/mp4,application/pdf" onchange="onMediaFileChange(event)">
-                                    <span style="font-size:0.65rem; color:#64748b; display:block; margin-top:2px;">Select JPG, PNG, MP4, or PDF. Max file size: 5MB.</span>
-                                </div>
-
-                                <!-- Dynamic Variables Mapping Block -->
-                                <div id="section-variable-mapping" style="display:none; border:1px solid #cbd5e1; border-radius:8px; padding:10px; background:#f8fafc;">
-                                    <span style="font-size:0.72rem; font-weight:700; color:#4b5563; display:block; margin-bottom:6px;"><i class="fas fa-brackets-curly" style="color:#6366f1;"></i> Variable Mappings</span>
-                                    <div id="variable-mappings-inputs" style="display:flex; flex-direction:column; gap:8px;"></div>
-                                </div>
-                            </div>
-                        </details>
-
                         <!-- Send Campaign Button -->
                         <button type="submit" class="btn btn-primary" id="btn-submit-campaign" style="width:100%; border-radius:10px; font-weight:700; padding:12px; height:44px; display:flex; align-items:center; justify-content:center; gap:8px;" disabled>
-                            <i class="fas fa-paper-plane"></i> Send Campaign
+                            <i class="fas fa-paper-plane"></i> Review &amp; Queue Campaign
                         </button>
                     </div>
                 </form>
@@ -2277,10 +2344,12 @@ window.addEventListener('DOMContentLoaded', () => {
 function filterTemplatesForSender(senderId) {
     senderId = parseInt(senderId, 10);
     const select = document.getElementById('sel-template-name');
+    const cardsContainer = document.getElementById('tpl-cards-container');
     const notice = document.getElementById('sender-templates-notice');
     if (!select) return;
 
     select.innerHTML = '<option value="">-- Choose Approved Marketing Template --</option>';
+    if (cardsContainer) cardsContainer.innerHTML = '';
 
     // Filter only MARKETING templates belonging to this sender account
     const matchingMarketing = allTemplatesData.filter(t => parseInt(t.sender_account_id, 10) === senderId && String(t.category).toUpperCase() === 'MARKETING');
@@ -2293,10 +2362,19 @@ function filterTemplatesForSender(senderId) {
         opt.innerText = '-- No Marketing Templates Found for ' + (senderId === 3 ? 'PEPP Updates' : 'PEPP Learning') + ' --';
         select.appendChild(opt);
 
+        if (cardsContainer) {
+            cardsContainer.innerHTML = `
+                <div style="padding:14px; text-align:center; color:#94a3b8; font-size:0.75rem; background:#f8fafc; border:1px dashed #cbd5e1; border-radius:8px;">
+                    <i class="fas fa-folder-open" style="font-size:1.2rem; margin-bottom:4px; display:block; color:#cbd5e1;"></i>
+                    No approved marketing templates found for ${senderId === 3 ? 'PEPP Updates' : 'PEPP Learning'}.
+                </div>
+            `;
+        }
+
         if (notice) {
             notice.style.display = 'block';
             if (senderId === 3 && utilityCount > 0) {
-                notice.innerHTML = `<i class="fas fa-circle-info" style="color:#7c3aed; margin-right:4px;"></i> <strong>PEPP Updates Notice:</strong> ${utilityCount} utility templates (faculty session reminders) belong to this sender and are protected from marketing broadcast. To send an admissions marketing broadcast, choose <strong>PEPP Learning</strong> above.`;
+                notice.innerHTML = `<i class="fas fa-circle-info" style="color:#7c3aed; margin-right:4px;"></i> <strong>PEPP Updates Notice:</strong> ${utilityCount} utility templates belong to this sender and are protected from marketing broadcast.`;
             } else {
                 notice.innerHTML = `<i class="fas fa-circle-info" style="color:#7c3aed; margin-right:4px;"></i> No approved marketing templates exist for this sender account.`;
             }
@@ -2311,6 +2389,33 @@ function filterTemplatesForSender(senderId) {
             opt.setAttribute('data-sender', t.sender_account_id);
             opt.innerText = `${t.template_name} (${t.language}) [ID #${t.id}]`;
             select.appendChild(opt);
+
+            if (cardsContainer) {
+                let meta = {};
+                try {
+                    meta = typeof t.meta_data === 'string' ? JSON.parse(t.meta_data) : (t.meta_data || {});
+                } catch(e) {}
+
+                const bodyPreview = meta.body_text || t.body_preview || '';
+                const card = document.createElement('div');
+                card.className = 'template-choice-card';
+                card.id = `tpl-card-elem-${t.id}`;
+                card.onclick = () => selectTemplateCard(t.template_name, t.id);
+
+                card.innerHTML = `
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                        <strong style="color:#1e293b; font-size:0.8rem; word-break:break-all;">${escapeHtml(t.template_name)}</strong>
+                        <div style="display:flex; gap:4px; align-items:center;">
+                            <span class="badge blue" style="font-size:0.62rem; text-transform:uppercase;">${escapeHtml(t.language || 'en')}</span>
+                            <span class="badge gray" style="font-size:0.62rem;">#${escapeHtml(t.id)}</span>
+                        </div>
+                    </div>
+                    <div style="font-size:0.7rem; color:#64748b; line-height:1.3; max-height:2.6em; overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;">
+                        ${escapeHtml(bodyPreview || '(No body text preview)')}
+                    </div>
+                `;
+                cardsContainer.appendChild(card);
+            }
         });
     }
 
@@ -2318,52 +2423,77 @@ function filterTemplatesForSender(senderId) {
     onTemplateSelected('', '');
 }
 
+function selectTemplateCard(tplName, tplId) {
+    const select = document.getElementById('sel-template-name');
+    if (select) select.value = tplName;
+
+    // Highlight selected card
+    document.querySelectorAll('.template-choice-card').forEach(c => c.classList.remove('selected'));
+    const chosenCard = document.getElementById(`tpl-card-elem-${tplId}`);
+    if (chosenCard) chosenCard.classList.add('selected');
+
+    onTemplateSelected(tplName, tplId);
+}
+
 function onTemplateSelected(tplName, tplId) {
-    const infoCard = document.getElementById('tpl-info-card');
     const revTpl = document.getElementById('rev-template-name');
     const inpTplId = document.getElementById('inp-template-id');
+    const badgeBox = document.getElementById('tpl-selected-badge-box');
+    const badgeName = document.getElementById('tpl-selected-badge-name');
+    const badgeLang = document.getElementById('tpl-selected-badge-lang');
+    const varPanel = document.getElementById('section-variable-mapping');
+    const noVarNotice = document.getElementById('no-variables-notice');
+    const mediaBlock = document.getElementById('section-media-header');
+    const currentSenderId = parseInt(document.getElementById('inp-sender-account-id').value || 3, 10);
 
     if (!tplName) {
         if (inpTplId) inpTplId.value = '';
         currentTemplateMeta = null;
-        if (infoCard) infoCard.style.display = 'none';
         if (revTpl) revTpl.innerText = 'None selected';
-        document.getElementById('section-variable-mapping').style.display = 'none';
-        document.getElementById('section-media-header').style.display = 'none';
+        if (badgeBox) badgeBox.style.display = 'none';
+        if (varPanel) varPanel.style.display = 'none';
+        if (noVarNotice) {
+            noVarNotice.style.display = 'block';
+            noVarNotice.innerHTML = '<i class="fas fa-circle-info" style="color:#8b5cf6; margin-right:4px;"></i> Select a template to map parameters, or none are required.';
+        }
+        if (mediaBlock) {
+            mediaBlock.style.display = 'none';
+            const mediaInp = document.getElementById('inp-media-file');
+            if (mediaInp) { mediaInp.required = false; mediaInp.value = ''; }
+        }
+        resetSimulatorPreview();
         return;
     }
 
     if (inpTplId) inpTplId.value = tplId || '';
     if (revTpl) revTpl.innerText = tplName;
-    document.getElementById('tpl-card-name').innerText = tplName;
 
     // Auto populate campaign name if blank
     const nameInp = document.getElementById('inp-campaign-name');
-    if (!nameInp.value || nameInp.value.includes('Campaign')) {
+    if (nameInp && (!nameInp.value || nameInp.value.includes('Campaign'))) {
         nameInp.value = tplName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) + ' Campaign';
         updateReviewCard();
     }
-
-    const currentSenderId = parseInt(document.getElementById('inp-sender-account-id').value || 3, 10);
 
     // Fast local lookup first (strictly bounded by selected sender account)
     let found = allTemplatesData.find(t => parseInt(t.sender_account_id, 10) === currentSenderId && ((tplId && t.id == tplId) || t.template_name === tplName));
     if (found) {
         if (inpTplId && !inpTplId.value) inpTplId.value = found.id;
+        if (badgeBox) {
+            badgeBox.style.display = 'flex';
+            if (badgeName) badgeName.innerText = tplName;
+            if (badgeLang) badgeLang.innerText = found.language || 'en';
+        }
+
         let meta = {};
         try {
             meta = typeof found.meta_data === 'string' ? JSON.parse(found.meta_data) : (found.meta_data || {});
         } catch(e) {}
-        currentTemplateMeta = meta;
-        if (infoCard) infoCard.style.display = 'block';
-        document.getElementById('tpl-card-lang').innerText = found.language || 'en';
-        document.getElementById('tpl-card-body-preview').innerText = meta.body_text || '(No body text preview)';
-        const cardSenderBadge = document.getElementById('tpl-card-sender-badge');
-        if (cardSenderBadge) {
-            cardSenderBadge.innerText = (parseInt(found.sender_account_id, 10) === 3) ? 'PEPP Updates' : 'PEPP Learning';
-            cardSenderBadge.style.background = (parseInt(found.sender_account_id, 10) === 3) ? '#f5f3ff' : '#ecfdf5';
-            cardSenderBadge.style.color = (parseInt(found.sender_account_id, 10) === 3) ? '#6d28d9' : '#047857';
+        if (!meta.body_text && Array.isArray(meta.components)) {
+            const bc = meta.components.find(c => (c.type || '').toUpperCase() === 'BODY');
+            if (bc) meta.body_text = bc.text || '';
         }
+        currentTemplateMeta = meta;
         renderVariableMappingUI(meta);
         renderMediaHeaderUI(meta);
         updateVisualCardPreview();
@@ -2375,14 +2505,31 @@ function onTemplateSelected(tplName, tplId) {
         .then(res => {
             if (res.success && res.meta) {
                 currentTemplateMeta = res.meta;
-                if (infoCard) infoCard.style.display = 'block';
-                document.getElementById('tpl-card-lang').innerText = res.meta.language || 'en';
-                document.getElementById('tpl-card-body-preview').innerText = res.body_preview || res.meta.body_text || '(No body text preview)';
+                if (badgeBox) {
+                    badgeBox.style.display = 'flex';
+                    if (badgeName) badgeName.innerText = tplName;
+                    if (badgeLang) badgeLang.innerText = res.meta.language || (found ? found.language : 'en');
+                }
                 renderVariableMappingUI(res.meta);
                 renderMediaHeaderUI(res.meta);
                 updateVisualCardPreview();
             }
         });
+}
+
+function resetSimulatorPreview() {
+    const simBody = document.getElementById('sim-box-body');
+    if (simBody) simBody.innerText = 'Select a template above to preview message content.';
+    const simH = document.getElementById('sim-box-header');
+    if (simH) simH.style.display = 'none';
+    const simF = document.getElementById('sim-box-footer');
+    if (simF) simF.style.display = 'none';
+    const simM = document.getElementById('sim-box-header-media');
+    if (simM) simM.style.display = 'none';
+    const simB = document.getElementById('sim-box-bubble-buttons');
+    if (simB) { simB.innerHTML = ''; simB.style.display = 'none'; }
+    const simFl = document.getElementById('sim-box-floating-buttons');
+    if (simFl) { simFl.innerHTML = ''; simFl.style.display = 'none'; }
 }
 
 function onFilterChanged() {
@@ -2408,6 +2555,9 @@ function onSenderSelected(key, id, name, isConfigured) {
         if (cardNotif) { cardNotif.style.borderColor = '#cbd5e1'; cardNotif.style.background = '#fff'; }
         if (cardAdm) { cardAdm.style.borderColor = '#7c3aed'; cardAdm.style.background = '#f5f3ff'; }
     }
+
+    const simSender = document.getElementById('sim-sender-name');
+    if (simSender) simSender.innerText = name;
 
     filterTemplatesForSender(id);
     updateReviewCard();
@@ -2463,15 +2613,21 @@ function onMediaFileChange(event) {
 function renderVariableMappingUI(meta) {
     const container = document.getElementById('variable-mappings-inputs');
     const panel = document.getElementById('section-variable-mapping');
-    container.innerHTML = '';
+    const noVarNotice = document.getElementById('no-variables-notice');
+    if (container) container.innerHTML = '';
 
     // Count variables in template body
-    const bodyText = meta.body_text || '';
+    let bodyText = meta.body_text || '';
+    if (!bodyText && Array.isArray(meta.components)) {
+        const bc = meta.components.find(c => (c.type || '').toUpperCase() === 'BODY');
+        if (bc) bodyText = bc.text || '';
+    }
     const matches = bodyText.match(/\{\{(\d+)\}\}/g);
     const varIndices = matches ? [...new Set(matches.map(m => parseInt(m.replace(/\D/g, ''))))].sort((a,b)=>a-b) : [];
 
     if (varIndices.length > 0) {
-        panel.style.display = 'block';
+        if (panel) panel.style.display = 'block';
+        if (noVarNotice) noVarNotice.style.display = 'none';
         varIndices.forEach(idx => {
             const row = document.createElement('div');
             row.style.display = 'grid';
@@ -2495,10 +2651,14 @@ function renderVariableMappingUI(meta) {
                     <input type="text" name="static_vars[${idx}]" id="inp-static-val-${idx}" class="form-control static-input" placeholder="Enter static text..." style="display:none; font-size:0.75rem; border-radius:6px;" oninput="updateVisualCardPreview()">
                 </div>
             `;
-            container.appendChild(row);
+            if (container) container.appendChild(row);
         });
     } else {
-        panel.style.display = 'none';
+        if (panel) panel.style.display = 'none';
+        if (noVarNotice) {
+            noVarNotice.style.display = 'block';
+            noVarNotice.innerHTML = '<i class="fas fa-circle-check" style="color:#059669; margin-right:4px;"></i> No variable mappings required for this template.';
+        }
     }
 }
 
@@ -2666,6 +2826,10 @@ function renderRecipientPreviewTable(recipients) {
 function updateVisualCardPreview() {
     if (!currentTemplateMeta) return;
 
+    // Sender name in simulator
+    const simSender = document.getElementById('sim-sender-name');
+    if (simSender) simSender.innerText = currentSenderName;
+
     // Header Media Block preview
     let hType = currentTemplateMeta.header_type || 'NONE';
     if (hType === 'NONE' && currentTemplateMeta.components) {
@@ -2676,27 +2840,45 @@ function updateVisualCardPreview() {
     }
     const previewMedia = document.getElementById('preview-box-header-media');
     const previewMediaIcon = document.getElementById('preview-box-media-icon');
-    if (hType !== 'NONE' && hType !== 'TEXT') {
-        previewMedia.style.display = 'flex';
-        if (hType === 'IMAGE') previewMediaIcon.className = 'fas fa-image';
-        else if (hType === 'VIDEO') previewMediaIcon.className = 'fas fa-video';
-        else if (hType === 'DOCUMENT') previewMediaIcon.className = 'fas fa-file-pdf';
-    } else {
-        previewMedia.style.display = 'none';
+    const simMedia = document.getElementById('sim-box-header-media');
+    const simMediaIcon = document.getElementById('sim-box-media-icon');
+
+    const isMedia = (hType !== 'NONE' && hType !== 'TEXT');
+    let iconClass = 'fas fa-file-image';
+    if (hType === 'IMAGE') iconClass = 'fas fa-image';
+    else if (hType === 'VIDEO') iconClass = 'fas fa-video';
+    else if (hType === 'DOCUMENT') iconClass = 'fas fa-file-pdf';
+
+    if (previewMedia) {
+        previewMedia.style.display = isMedia ? 'flex' : 'none';
+        if (previewMediaIcon) previewMediaIcon.className = iconClass;
+    }
+    if (simMedia) {
+        simMedia.style.display = isMedia ? 'flex' : 'none';
+        if (simMediaIcon) simMediaIcon.className = iconClass;
     }
 
     // Header Text
     const hText = currentTemplateMeta.header_text || '';
     const headerPreview = document.getElementById('preview-box-header');
-    if (hType === 'TEXT' && hText.trim()) {
-        headerPreview.style.display = 'block';
-        headerPreview.innerText = hText;
-    } else {
-        headerPreview.style.display = 'none';
+    const simHeader = document.getElementById('sim-box-header');
+    const isHeaderText = (hType === 'TEXT' && hText.trim());
+
+    if (headerPreview) {
+        headerPreview.style.display = isHeaderText ? 'block' : 'none';
+        headerPreview.innerText = isHeaderText ? hText : '';
+    }
+    if (simHeader) {
+        simHeader.style.display = isHeaderText ? 'block' : 'none';
+        simHeader.innerText = isHeaderText ? hText : '';
     }
 
     // Body text variable mapping resolution
     let bodyText = currentTemplateMeta.body_text || '';
+    if (!bodyText && Array.isArray(currentTemplateMeta.components)) {
+        const bc = currentTemplateMeta.components.find(c => (c.type || '').toUpperCase() === 'BODY');
+        if (bc) bodyText = bc.text || '';
+    }
     const sampleLead = eligibleRecipientsList[0] || { name: 'Sample Name', course: 'Psychology' };
 
     // Resolve mappings
@@ -2717,82 +2899,114 @@ function updateVisualCardPreview() {
         bodyText = bodyText.split(`{{${idx}}}`).join(finalVal);
     });
 
-    document.getElementById('preview-box-body').innerText = bodyText;
+    const bodyPreview = document.getElementById('preview-box-body');
+    if (bodyPreview) bodyPreview.innerText = bodyText;
+    const simBody = document.getElementById('sim-box-body');
+    if (simBody) simBody.innerText = bodyText || 'Select a template above to preview message content.';
 
     // Footer Text
     const fText = currentTemplateMeta.footer_text || '';
     const footerPreview = document.getElementById('preview-box-footer');
-    if (fText.trim()) {
-        footerPreview.style.display = 'block';
-        footerPreview.innerText = fText;
-    } else {
-        footerPreview.style.display = 'none';
+    const simFooter = document.getElementById('sim-box-footer');
+    const isFooter = !!fText.trim();
+
+    if (footerPreview) {
+        footerPreview.style.display = isFooter ? 'block' : 'none';
+        footerPreview.innerText = isFooter ? fText : '';
+    }
+    if (simFooter) {
+        simFooter.style.display = isFooter ? 'block' : 'none';
+        simFooter.innerText = isFooter ? fText : '';
     }
 
     // Buttons Rendering
-    const bubbleButtons = document.getElementById('preview-box-bubble-buttons');
-    const floatButtons = document.getElementById('preview-box-floating-buttons');
-    bubbleButtons.innerHTML = '';
-    floatButtons.innerHTML = '';
+    const previewBubble = document.getElementById('preview-box-bubble-buttons');
+    const previewFloat = document.getElementById('preview-box-floating-buttons');
+    const simBubble = document.getElementById('sim-box-bubble-buttons');
+    const simFloat = document.getElementById('sim-box-floating-buttons');
+
+    if (previewBubble) previewBubble.innerHTML = '';
+    if (previewFloat) previewFloat.innerHTML = '';
+    if (simBubble) simBubble.innerHTML = '';
+    if (simFloat) simFloat.innerHTML = '';
 
     const btnType = currentTemplateMeta.button_type || 'NONE';
     if (btnType === 'QUICK_REPLY' && currentTemplateMeta.buttons?.quick_reply) {
-        bubbleButtons.style.display = 'flex';
-        floatButtons.style.display = 'none';
+        if (previewBubble) previewBubble.style.display = 'flex';
+        if (previewFloat) previewFloat.style.display = 'none';
+        if (simBubble) simBubble.style.display = 'flex';
+        if (simFloat) simFloat.style.display = 'none';
+
         Object.values(currentTemplateMeta.buttons.quick_reply).forEach(txt => {
             if (txt) {
-                const btn = document.createElement('div');
-                btn.style.background = '#f8fafc';
-                btn.style.color = '#3b82f6';
-                btn.style.padding = '6px';
-                btn.style.textAlign = 'center';
-                btn.style.borderRadius = '6px';
-                btn.style.fontSize = '0.7rem';
-                btn.style.fontWeight = '700';
-                btn.style.border = '1px solid #e2e8f0';
-                let btnText = txt;
-                if (typeof txt === 'object' && txt !== null) {
-                    btnText = txt.text || '';
-                }
-                btn.innerText = btnText;
-                bubbleButtons.appendChild(btn);
+                let btnText = (typeof txt === 'object' && txt !== null) ? (txt.text || '') : txt;
+                if (!btnText) return;
+
+                const createBtn = () => {
+                    const btn = document.createElement('div');
+                    btn.style.background = '#f8fafc';
+                    btn.style.color = '#3b82f6';
+                    btn.style.padding = '6px';
+                    btn.style.textAlign = 'center';
+                    btn.style.borderRadius = '6px';
+                    btn.style.fontSize = '0.7rem';
+                    btn.style.fontWeight = '700';
+                    btn.style.border = '1px solid #e2e8f0';
+                    btn.innerText = btnText;
+                    return btn;
+                };
+                if (previewBubble) previewBubble.appendChild(createBtn());
+                if (simBubble) simBubble.appendChild(createBtn());
             }
         });
     } else if (btnType === 'CTA' && currentTemplateMeta.buttons) {
-        bubbleButtons.style.display = 'none';
-        floatButtons.style.display = 'flex';
+        if (previewBubble) previewBubble.style.display = 'none';
+        if (previewFloat) previewFloat.style.display = 'flex';
+        if (simBubble) simBubble.style.display = 'none';
+        if (simFloat) simFloat.style.display = 'flex';
+
         const phone = currentTemplateMeta.buttons.phone_text;
         const url = currentTemplateMeta.buttons.url_text;
 
         if (phone) {
-            const btn = document.createElement('div');
-            btn.style.background = '#fff';
-            btn.style.color = '#00a884';
-            btn.style.padding = '8px';
-            btn.style.textAlign = 'center';
-            btn.style.borderRadius = '6px';
-            btn.style.fontSize = '0.7rem';
-            btn.style.fontWeight = '700';
-            btn.style.boxShadow = '0 1px 2px rgba(0,0,0,0.1)';
-            btn.innerHTML = `<i class="fas fa-phone"></i> ${phone}`;
-            floatButtons.appendChild(btn);
+            const createPhoneBtn = () => {
+                const btn = document.createElement('div');
+                btn.style.background = '#fff';
+                btn.style.color = '#00a884';
+                btn.style.padding = '8px';
+                btn.style.textAlign = 'center';
+                btn.style.borderRadius = '6px';
+                btn.style.fontSize = '0.7rem';
+                btn.style.fontWeight = '700';
+                btn.style.boxShadow = '0 1px 2px rgba(0,0,0,0.1)';
+                btn.innerHTML = `<i class="fas fa-phone"></i> ${escapeHtml(phone)}`;
+                return btn;
+            };
+            if (previewFloat) previewFloat.appendChild(createPhoneBtn());
+            if (simFloat) simFloat.appendChild(createPhoneBtn());
         }
         if (url) {
-            const btn = document.createElement('div');
-            btn.style.background = '#fff';
-            btn.style.color = '#00a884';
-            btn.style.padding = '8px';
-            btn.style.textAlign = 'center';
-            btn.style.borderRadius = '6px';
-            btn.style.fontSize = '0.7rem';
-            btn.style.fontWeight = '700';
-            btn.style.boxShadow = '0 1px 2px rgba(0,0,0,0.1)';
-            btn.innerHTML = `<i class="fas fa-arrow-up-right-from-square"></i> ${url}`;
-            floatButtons.appendChild(btn);
+            const createUrlBtn = () => {
+                const btn = document.createElement('div');
+                btn.style.background = '#fff';
+                btn.style.color = '#00a884';
+                btn.style.padding = '8px';
+                btn.style.textAlign = 'center';
+                btn.style.borderRadius = '6px';
+                btn.style.fontSize = '0.7rem';
+                btn.style.fontWeight = '700';
+                btn.style.boxShadow = '0 1px 2px rgba(0,0,0,0.1)';
+                btn.innerHTML = `<i class="fas fa-arrow-up-right-from-square"></i> ${escapeHtml(url)}`;
+                return btn;
+            };
+            if (previewFloat) previewFloat.appendChild(createUrlBtn());
+            if (simFloat) simFloat.appendChild(createUrlBtn());
         }
     } else {
-        bubbleButtons.style.display = 'none';
-        floatButtons.style.display = 'none';
+        if (previewBubble) previewBubble.style.display = 'none';
+        if (previewFloat) previewFloat.style.display = 'none';
+        if (simBubble) simBubble.style.display = 'none';
+        if (simFloat) simFloat.style.display = 'none';
     }
 }
 

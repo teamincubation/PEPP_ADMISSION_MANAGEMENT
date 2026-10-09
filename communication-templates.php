@@ -14,9 +14,19 @@ $page_sub    = 'Synchronize and map Meta-approved WhatsApp Cloud API templates';
 $success_message = '';
 $error_message   = '';
 
+$events = ['student_registration', 'student_approval', 'student_rejection', 'installment_reminder', 'payment_receipt', 'session_scheduled', 'payment_rejection', 'installment_overdue', 'course_migration_completed', 'alumni_verification_completed', 'alumni_referral_code_generated', 'referral_earning_credited', 'referral_payout_sent', 'birthday_greeting', 'birthday_reward_claimed'];
+
 // Self-healing database structure initialization
 try {
-    $has_table = (bool)$pdo->query("SHOW TABLES LIKE 'communication_queue'")->fetchColumn();
+    $driverName = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+    $isSqlite = ($driverName === 'sqlite');
+
+    if ($isSqlite) {
+        $has_table = (bool)$pdo->query("SELECT name FROM sqlite_master WHERE type='table' AND name='communication_queue'")->fetchColumn();
+    } else {
+        $has_table = (bool)$pdo->query("SHOW TABLES LIKE 'communication_queue'")->fetchColumn();
+    }
+
     if (!$has_table && file_exists(__DIR__ . '/database-update-16.sql')) {
         $sql = file_get_contents(__DIR__ . '/database-update-16.sql');
         $pdo->exec($sql);
@@ -24,31 +34,51 @@ try {
     }
 
     // Check and add columns to communication_templates
-    $cols = $pdo->query("SHOW COLUMNS FROM communication_templates")->fetchAll(PDO::FETCH_COLUMN);
+    if ($isSqlite) {
+        $cols = $pdo->query("PRAGMA table_info(communication_templates)")->fetchAll(PDO::FETCH_COLUMN, 1);
+    } else {
+        $cols = $pdo->query("SHOW COLUMNS FROM communication_templates")->fetchAll(PDO::FETCH_COLUMN);
+    }
     if (!in_array('quality_status', $cols)) {
-        $pdo->exec("ALTER TABLE communication_templates ADD COLUMN quality_status VARCHAR(50) DEFAULT NULL AFTER category");
+        $pdo->exec("ALTER TABLE communication_templates ADD COLUMN quality_status VARCHAR(50) DEFAULT NULL" . ($isSqlite ? "" : " AFTER category"));
     }
     if (!in_array('rejection_reason', $cols)) {
-        $pdo->exec("ALTER TABLE communication_templates ADD COLUMN rejection_reason TEXT DEFAULT NULL AFTER quality_status");
+        $pdo->exec("ALTER TABLE communication_templates ADD COLUMN rejection_reason TEXT DEFAULT NULL" . ($isSqlite ? "" : " AFTER quality_status"));
     }
 
     // Check and create communication_event_mappings
-    $has_event_table = (bool)$pdo->query("SHOW TABLES LIKE 'communication_event_mappings'")->fetchColumn();
+    if ($isSqlite) {
+        $has_event_table = (bool)$pdo->query("SELECT name FROM sqlite_master WHERE type='table' AND name='communication_event_mappings'")->fetchColumn();
+    } else {
+        $has_event_table = (bool)$pdo->query("SHOW TABLES LIKE 'communication_event_mappings'")->fetchColumn();
+    }
     if (!$has_event_table) {
-        $pdo->exec("
-            CREATE TABLE IF NOT EXISTS `communication_event_mappings` (
-              `id` INT AUTO_INCREMENT PRIMARY KEY,
-              `event_name` VARCHAR(100) NOT NULL UNIQUE,
-              `template_name` VARCHAR(100) DEFAULT NULL,
-              `parameter_mappings` LONGTEXT DEFAULT NULL,
-              `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        ");
+        if ($isSqlite) {
+            $pdo->exec("
+                CREATE TABLE IF NOT EXISTS communication_event_mappings (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  event_name VARCHAR(100) NOT NULL UNIQUE,
+                  template_name VARCHAR(100) DEFAULT NULL,
+                  parameter_mappings TEXT DEFAULT NULL,
+                  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+            ");
+        } else {
+            $pdo->exec("
+                CREATE TABLE IF NOT EXISTS `communication_event_mappings` (
+                  `id` INT AUTO_INCREMENT PRIMARY KEY,
+                  `event_name` VARCHAR(100) NOT NULL UNIQUE,
+                  `template_name` VARCHAR(100) DEFAULT NULL,
+                  `parameter_mappings` LONGTEXT DEFAULT NULL,
+                  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            ");
+        }
     }
 
     // Seed default event mappings
-    $events = ['student_registration', 'student_approval', 'student_rejection', 'installment_reminder', 'payment_receipt', 'session_scheduled', 'payment_rejection', 'installment_overdue', 'course_migration_completed', 'alumni_verification_completed', 'alumni_referral_code_generated', 'referral_earning_credited', 'referral_payout_sent', 'birthday_greeting', 'birthday_reward_claimed'];
-    $stmtSeed = $pdo->prepare("INSERT IGNORE INTO communication_event_mappings (event_name) VALUES (?)");
+    $ignoreClause = $isSqlite ? "INSERT OR IGNORE" : "INSERT IGNORE";
+    $stmtSeed = $pdo->prepare("$ignoreClause INTO communication_event_mappings (event_name) VALUES (?)");
     foreach ($events as $ev) {
         $stmtSeed->execute([$ev]);
     }
@@ -272,6 +302,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         try {
             $hasScopeCols = $resolver->hasTemplateAccountColumns();
             if ($hasScopeCols) {
+                $stmtFindExisting = $pdo->prepare("
+                    SELECT id FROM communication_templates
+                    WHERE channel = 'whatsapp'
+                      AND sender_account_id = ?
+                      AND (template_name = ? OR (meta_template_id IS NOT NULL AND meta_template_id = ?))
+                    ORDER BY id ASC LIMIT 1
+                ");
+                $stmtUpdateInPlace = $pdo->prepare("
+                    UPDATE communication_templates
+                    SET waba_id = ?,
+                        meta_template_id = ?,
+                        template_name = ?,
+                        language = ?,
+                        status = ?,
+                        category = ?,
+                        quality_status = ?,
+                        rejection_reason = ?,
+                        meta_data = ?,
+                        updated_at = NOW()
+                    WHERE id = ?
+                ");
                 $stmtUpsert = $pdo->prepare("
                     INSERT INTO communication_templates (channel, sender_account_id, waba_id, meta_template_id, template_name, language, status, category, quality_status, rejection_reason, meta_data, updated_at)
                     VALUES ('whatsapp', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
@@ -364,18 +415,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                         ]);
 
                         if ($hasScopeCols) {
-                            $stmtUpsert->execute([
-                                $targetAccountId,
-                                $targetWaba,
-                                $metaTplId,
-                                $name,
-                                $lang,
-                                $status,
-                                $category,
-                                $qualityStatus,
-                                $rejectedReason,
-                                $metaData
-                            ]);
+                            $stmtFindExisting->execute([$targetAccountId, $name, $metaTplId]);
+                            $existingId = $stmtFindExisting->fetchColumn();
+
+                            if ($existingId) {
+                                $stmtUpdateInPlace->execute([
+                                    $targetWaba,
+                                    $metaTplId,
+                                    $name,
+                                    $lang,
+                                    $status,
+                                    $category,
+                                    $qualityStatus,
+                                    $rejectedReason,
+                                    $metaData,
+                                    $existingId
+                                ]);
+                            } else {
+                                $stmtUpsert->execute([
+                                    $targetAccountId,
+                                    $targetWaba,
+                                    $metaTplId,
+                                    $name,
+                                    $lang,
+                                    $status,
+                                    $category,
+                                    $qualityStatus,
+                                    $rejectedReason,
+                                    $metaData
+                                ]);
+                            }
                         } else {
                             $stmtUpsert->execute([$name, $lang, $status, $category, $qualityStatus, $rejectedReason, $metaData]);
                         }
@@ -753,33 +822,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && in_array
     }
 }
 
+// Determine active sender account context (default to Account 3 / PEPP Updates)
+$selectedAccountId = isset($_GET['account_id']) ? (int)$_GET['account_id'] : 3;
+if ($selectedAccountId !== 1 && $selectedAccountId !== 3) {
+    $selectedAccountId = 3;
+}
+
 // Load local synchronized templates
 $localTemplatesRaw = [];
 try {
-    $localTemplatesRaw = $pdo->query("SELECT * FROM communication_templates WHERE channel = 'whatsapp' ORDER BY template_name ASC")->fetchAll();
+    $localTemplatesRaw = $pdo->query("SELECT * FROM communication_templates WHERE channel = 'whatsapp' ORDER BY template_name ASC")->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $ex) {}
 
 require_once 'includes/communication/WhatsAppAccountResolver.php';
 $resolver = WhatsAppAccountResolver::getInstance($pdo);
 
-$localTemplates = [];
+// Deduplicate rows canonically at the presentation layer (resolving en vs en_US duplicates)
+$canonicalAll = $resolver->canonicalizeTemplateRows($localTemplatesRaw);
+
+$templatesBySender = [1 => [], 3 => []];
 $admissionsApprovedCount = 0;
 $notifApprovedCount = 0;
+$admissionsMarketingCount = 0;
+$notifMarketingCount = 0;
 $approvedTemplates = [];
 $approvedTemplatesById = [];
 $approvedTemplatesBySender = [1 => [], 3 => []];
 
 require_once 'includes/communication/CommunicationHelper.php';
-foreach ($localTemplatesRaw as $tRaw) {
-    $tpl = $resolver->normalizeTemplateRow($tRaw);
-    $localTemplates[] = $tpl;
+foreach ($canonicalAll as $tpl) {
     $sId = (int)$tpl['sender_account_id'];
+    if (!isset($templatesBySender[$sId])) {
+        $templatesBySender[$sId] = [];
+    }
+    $templatesBySender[$sId][] = $tpl;
+
     $isApproved = (strtolower($tpl['status']) === 'approved');
+    $isMarketing = (strtoupper($tpl['category'] ?? '') === 'MARKETING');
 
     if ($sId === 3) {
         if ($isApproved) $notifApprovedCount++;
+        if ($isMarketing) $notifMarketingCount++;
     } else {
         if ($isApproved) $admissionsApprovedCount++;
+        if ($isMarketing) $admissionsMarketingCount++;
     }
 
     if ($isApproved) {
@@ -805,8 +891,15 @@ foreach ($localTemplatesRaw as $tRaw) {
     }
 }
 
+// Strictly scope displayed templates to the selected account
+$localTemplates = $templatesBySender[$selectedAccountId] ?? [];
+
 $admissionsAcc = $resolver->getAccount(1);
 $notifAcc = $resolver->getAccount(3);
+$selectedAcc = $resolver->getAccount($selectedAccountId);
+
+$notifTotalCount = count($templatesBySender[3] ?? []);
+$admissionsTotalCount = count($templatesBySender[1] ?? []);
 
 // Load faculty instructions
 $facultyInstructions = [];
@@ -842,13 +935,13 @@ include 'includes/admin_nav.php';
     <?php $currentTab = $_GET['tab'] ?? 'sync'; ?>
     <!-- ── SUB-PAGE TABS ── -->
     <div style="display:flex; gap:10px; margin-bottom:20px; border-bottom:2px solid #e5e7eb; padding-bottom:8px; flex-wrap:wrap;">
-        <a href="?tab=sync" class="btn btn-sm <?php echo $currentTab === 'sync' ? 'btn-primary' : 'btn-outline'; ?>" style="border-radius:8px; font-weight:700;">
+        <a href="?tab=sync&account_id=<?php echo $selectedAccountId; ?>" class="btn btn-sm <?php echo $currentTab === 'sync' ? 'btn-primary' : 'btn-outline'; ?>" style="border-radius:8px; font-weight:700;">
             <i class="fas fa-layer-group"></i> Meta Templates Sync &amp; Mappings
         </a>
-        <a href="?tab=instructions" class="btn btn-sm <?php echo $currentTab === 'instructions' ? 'btn-primary' : 'btn-outline'; ?>" style="border-radius:8px; font-weight:700;">
+        <a href="?tab=instructions&account_id=<?php echo $selectedAccountId; ?>" class="btn btn-sm <?php echo $currentTab === 'instructions' ? 'btn-primary' : 'btn-outline'; ?>" style="border-radius:8px; font-weight:700;">
             <i class="fas fa-chalkboard-user"></i> Faculty Live Session Instructions (<?php echo count($facultyInstructions); ?>)
         </a>
-        <a href="?tab=faculty_templates" class="btn btn-sm <?php echo $currentTab === 'faculty_templates' ? 'btn-primary' : 'btn-outline'; ?>" style="border-radius:8px; font-weight:700;">
+        <a href="?tab=faculty_templates&account_id=<?php echo $selectedAccountId; ?>" class="btn btn-sm <?php echo $currentTab === 'faculty_templates' ? 'btn-primary' : 'btn-outline'; ?>" style="border-radius:8px; font-weight:700;">
             <i class="fab fa-whatsapp"></i> Faculty Live Session Templates (5)
         </a>
     </div>
@@ -869,56 +962,87 @@ include 'includes/admin_nav.php';
         </form>
     </div>
 
-    <!-- ── SENDER ACCOUNT TABS / CARDS (PHASE 5) ── -->
-    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap:16px; margin-bottom:24px;">
-        <!-- Card 1: PEPP Learning (Admissions) -->
-        <div id="sender-card-1" class="sender-scope-card" onclick="filterTemplatesBySender(1)" style="cursor:pointer; background:#fff; border:2.5px solid #059669; border-radius:14px; padding:18px; box-shadow:0 2px 6px rgba(5,150,105,0.08); transition:all 0.15s ease;">
-            <div style="display:flex; justify-content:space-between; align-items:flex-start;">
-                <div>
-                    <span style="display:inline-flex; align-items:center; gap:6px; font-size:0.7rem; font-weight:800; background:#ecfdf5; color:#047857; padding:3px 8px; border-radius:6px; text-transform:uppercase;">
-                        <span style="width:7px; height:7px; border-radius:50%; background:#10b981;"></span> Account 1 &bull; Admissions
-                    </span>
-                    <h4 style="margin:8px 0 2px; font-size:1.1rem; font-weight:800; color:#111827;">PEPP Learning</h4>
-                    <div style="font-size:0.82rem; font-weight:600; color:#374151; margin-top:2px;">
-                        <i class="fab fa-whatsapp" style="color:#059669;"></i> +91 62825 63209
-                    </div>
-                    <div style="font-size:0.72rem; color:#6b7280; margin-top:4px;">
-                        WABA: <code style="background:#f1f5f9; padding:2px 6px; border-radius:4px; font-weight:600;">1410328164305566</code>
-                    </div>
-                </div>
-                <div style="text-align:right;">
-                    <div style="font-size:1.6rem; font-weight:800; color:#059669; line-height:1;"><?php echo $admissionsApprovedCount; ?></div>
-                    <div style="font-size:0.7rem; color:#6b7280; font-weight:600; margin-top:4px;">Approved Templates</div>
-                </div>
-            </div>
-            <div style="margin-top:12px; padding-top:10px; border-top:1px dashed #e5e7eb; font-size:0.75rem; color:#047857; font-weight:700; display:flex; align-items:center; gap:4px;">
-                <i class="fas fa-filter"></i> Click to view PEPP Learning templates only
-            </div>
+    <!-- ── CLEAN ACCOUNT SELECTOR (PHASE 3) ── -->
+    <div style="margin-bottom:24px;">
+        <div style="font-size:0.8rem; font-weight:700; color:#4b5563; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:10px;">
+            <i class="fas fa-building" style="color:#7c3aed; margin-right:4px;"></i> Select WhatsApp Account Scope
         </div>
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap:16px;">
+            <!-- Card 3: PEPP Updates (Account 3 - Default / Marketing) -->
+            <a href="?tab=sync&account_id=3" style="text-decoration:none !important; color:inherit;">
+                <div id="sender-card-3" class="sender-scope-card" style="cursor:pointer; background:<?php echo $selectedAccountId === 3 ? '#faf5ff' : '#fff'; ?>; border:<?php echo $selectedAccountId === 3 ? '2.5px solid #7c3aed' : '1.5px solid #e5e7eb'; ?>; border-radius:14px; padding:18px; box-shadow:<?php echo $selectedAccountId === 3 ? '0 4px 12px rgba(124,58,237,0.12)' : '0 1px 3px rgba(0,0,0,0.03)'; ?>; transition:all 0.15s ease;">
+                    <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                        <div>
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <span style="display:inline-flex; align-items:center; gap:6px; font-size:0.7rem; font-weight:800; background:#f5f3ff; color:#6d28d9; padding:3px 8px; border-radius:6px; text-transform:uppercase;">
+                                    <span style="width:7px; height:7px; border-radius:50%; background:#8b5cf6;"></span> Account 3 &bull; Notifications
+                                </span>
+                                <?php if ($selectedAccountId === 3): ?>
+                                    <span style="font-size:0.68rem; font-weight:800; background:#7c3aed; color:#fff; padding:2px 8px; border-radius:6px;">
+                                        <i class="fas fa-check"></i> ACTIVE SCOPE
+                                    </span>
+                                <?php endif; ?>
+                            </div>
+                            <h4 style="margin:8px 0 2px; font-size:1.15rem; font-weight:800; color:#111827;">PEPP Updates</h4>
+                            <div style="font-size:0.82rem; font-weight:600; color:#374151; margin-top:2px;">
+                                <i class="fab fa-whatsapp" style="color:#7c3aed;"></i> +91 79943 04400
+                            </div>
+                            <div style="font-size:0.72rem; color:#6b7280; margin-top:4px;">
+                                WABA: <code style="background:#f1f5f9; padding:2px 6px; border-radius:4px; font-weight:600;">1099020233033644</code>
+                            </div>
+                        </div>
+                        <div style="text-align:right;">
+                            <div style="font-size:1.8rem; font-weight:800; color:#7c3aed; line-height:1;"><?php echo $notifTotalCount; ?></div>
+                            <div style="font-size:0.7rem; color:#6b7280; font-weight:600; margin-top:4px;">Total Templates</div>
+                            <div style="font-size:0.68rem; color:#059669; font-weight:700; margin-top:2px;"><?php echo $notifApprovedCount; ?> Approved</div>
+                        </div>
+                    </div>
+                    <div style="margin-top:14px; padding-top:10px; border-top:1px dashed #e5e7eb; display:flex; justify-content:space-between; align-items:center; font-size:0.75rem;">
+                        <span style="color:#6b7280;">Marketing: <strong style="color:#7c3aed;"><?php echo $notifMarketingCount; ?></strong></span>
+                        <span style="color:<?php echo $selectedAccountId === 3 ? '#7c3aed' : '#94a3b8'; ?>; font-weight:700;">
+                            <?php echo $selectedAccountId === 3 ? '<i class="fas fa-circle-dot"></i> Currently Viewing' : 'Click to view PEPP Updates templates'; ?>
+                        </span>
+                    </div>
+                </div>
+            </a>
 
-        <!-- Card 3: PEPP Updates (Notifications) -->
-        <div id="sender-card-3" class="sender-scope-card" onclick="filterTemplatesBySender(3)" style="cursor:pointer; background:#fff; border:1.5px solid #e5e7eb; border-radius:14px; padding:18px; box-shadow:0 1px 3px rgba(0,0,0,0.03); transition:all 0.15s ease;">
-            <div style="display:flex; justify-content:space-between; align-items:flex-start;">
-                <div>
-                    <span style="display:inline-flex; align-items:center; gap:6px; font-size:0.7rem; font-weight:800; background:#f5f3ff; color:#6d28d9; padding:3px 8px; border-radius:6px; text-transform:uppercase;">
-                        <span style="width:7px; height:7px; border-radius:50%; background:#8b5cf6;"></span> Account 3 &bull; Notifications
-                    </span>
-                    <h4 style="margin:8px 0 2px; font-size:1.1rem; font-weight:800; color:#111827;">PEPP Updates</h4>
-                    <div style="font-size:0.82rem; font-weight:600; color:#374151; margin-top:2px;">
-                        <i class="fab fa-whatsapp" style="color:#7c3aed;"></i> +91 79943 04400
+            <!-- Card 1: PEPP Learning (Admissions) -->
+            <a href="?tab=sync&account_id=1" style="text-decoration:none !important; color:inherit;">
+                <div id="sender-card-1" class="sender-scope-card" style="cursor:pointer; background:<?php echo $selectedAccountId === 1 ? '#ecfdf5' : '#fff'; ?>; border:<?php echo $selectedAccountId === 1 ? '2.5px solid #059669' : '1.5px solid #e5e7eb'; ?>; border-radius:14px; padding:18px; box-shadow:<?php echo $selectedAccountId === 1 ? '0 4px 12px rgba(5,150,105,0.12)' : '0 1px 3px rgba(0,0,0,0.03)'; ?>; transition:all 0.15s ease;">
+                    <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                        <div>
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <span style="display:inline-flex; align-items:center; gap:6px; font-size:0.7rem; font-weight:800; background:#ecfdf5; color:#047857; padding:3px 8px; border-radius:6px; text-transform:uppercase;">
+                                    <span style="width:7px; height:7px; border-radius:50%; background:#10b981;"></span> Account 1 &bull; Admissions
+                                </span>
+                                <?php if ($selectedAccountId === 1): ?>
+                                    <span style="font-size:0.68rem; font-weight:800; background:#059669; color:#fff; padding:2px 8px; border-radius:6px;">
+                                        <i class="fas fa-check"></i> ACTIVE SCOPE
+                                    </span>
+                                <?php endif; ?>
+                            </div>
+                            <h4 style="margin:8px 0 2px; font-size:1.15rem; font-weight:800; color:#111827;">PEPP Learning</h4>
+                            <div style="font-size:0.82rem; font-weight:600; color:#374151; margin-top:2px;">
+                                <i class="fab fa-whatsapp" style="color:#059669;"></i> +91 62825 63209
+                            </div>
+                            <div style="font-size:0.72rem; color:#6b7280; margin-top:4px;">
+                                WABA: <code style="background:#f1f5f9; padding:2px 6px; border-radius:4px; font-weight:600;">1410328164305566</code>
+                            </div>
+                        </div>
+                        <div style="text-align:right;">
+                            <div style="font-size:1.8rem; font-weight:800; color:#059669; line-height:1;"><?php echo $admissionsTotalCount; ?></div>
+                            <div style="font-size:0.7rem; color:#6b7280; font-weight:600; margin-top:4px;">Total Templates</div>
+                            <div style="font-size:0.68rem; color:#059669; font-weight:700; margin-top:2px;"><?php echo $admissionsApprovedCount; ?> Approved</div>
+                        </div>
                     </div>
-                    <div style="font-size:0.72rem; color:#6b7280; margin-top:4px;">
-                        WABA: <code style="background:#f1f5f9; padding:2px 6px; border-radius:4px; font-weight:600;">1099020233033644</code>
+                    <div style="margin-top:14px; padding-top:10px; border-top:1px dashed #e5e7eb; display:flex; justify-content:space-between; align-items:center; font-size:0.75rem;">
+                        <span style="color:#6b7280;">Marketing: <strong style="color:#059669;"><?php echo $admissionsMarketingCount; ?></strong></span>
+                        <span style="color:<?php echo $selectedAccountId === 1 ? '#059669' : '#94a3b8'; ?>; font-weight:700;">
+                            <?php echo $selectedAccountId === 1 ? '<i class="fas fa-circle-dot"></i> Currently Viewing' : 'Click to view PEPP Learning templates'; ?>
+                        </span>
                     </div>
                 </div>
-                <div style="text-align:right;">
-                    <div style="font-size:1.6rem; font-weight:800; color:#7c3aed; line-height:1;"><?php echo $notifApprovedCount; ?></div>
-                    <div style="font-size:0.7rem; color:#6b7280; font-weight:600; margin-top:4px;">Approved Templates</div>
-                </div>
-            </div>
-            <div style="margin-top:12px; padding-top:10px; border-top:1px dashed #e5e7eb; font-size:0.75rem; color:#6d28d9; font-weight:700; display:flex; align-items:center; gap:4px;">
-                <i class="fas fa-filter"></i> Click to view PEPP Updates templates only
-            </div>
+            </a>
         </div>
     </div>
 
@@ -987,14 +1111,19 @@ include 'includes/admin_nav.php';
                                 </div>
                                 <div>
                                     <input type="hidden" name="mappings[<?php echo htmlspecialchars($eventName); ?>][sender_account_id]" value="<?php echo $evSenderId; ?>">
-                                    <select name="mappings[<?php echo htmlspecialchars($eventName); ?>][template_name]" class="form-control" style="width:230px; max-width:100%; border-radius:8px;" onchange="onMappingTemplateChange('<?php echo htmlspecialchars($eventName); ?>', this.value)">
+                                    <select name="mappings[<?php echo htmlspecialchars($eventName); ?>][template_name]" class="form-control" style="width:260px; max-width:100%; border-radius:8px;" onchange="onMappingTemplateChange('<?php echo htmlspecialchars($eventName); ?>', this.value)">
                                         <option value="">- None (Disabled) -</option>
                                         <?php foreach ($evAvailableTemplates as $tpl): ?>
                                             <option value="<?php echo htmlspecialchars($tpl['name']); ?>" <?php echo $mappedTpl === $tpl['name'] ? 'selected' : ''; ?>>
-                                                <?php echo htmlspecialchars($tpl['name']); ?> (<?php echo htmlspecialchars($tpl['language']); ?>)
+                                                <?php echo htmlspecialchars(ucwords(str_replace('_', ' ', $tpl['name']))); ?> (<?php echo strtoupper(htmlspecialchars($tpl['language'])); ?>)
                                             </option>
                                         <?php endforeach; ?>
                                     </select>
+                                    <div id="mapping-tpl-hint-<?php echo htmlspecialchars($eventName); ?>" style="font-size:0.68rem; color:#6b7280; margin-top:3px; text-align:right;">
+                                        <?php if (!empty($mappedTpl)): ?>
+                                            Meta: <code><?php echo htmlspecialchars($mappedTpl); ?></code> &bull; <span style="color:#059669; font-weight:700;">Approved</span>
+                                        <?php endif; ?>
+                                    </div>
                                 </div>
                             </div>
 
@@ -1152,18 +1281,53 @@ include 'includes/admin_nav.php';
 
     <!-- Templates Table -->
     <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; overflow:hidden;">
-        <div style="background:#f8fafc; border-bottom:1px solid #e5e7eb; padding:14px 20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
-            <div>
-                <h3 id="table-title" style="margin:0; font-size:1rem; font-weight:700; color:#1f2937;">
-                    <i class="fas fa-list" style="margin-right:4px;"></i> Synchronized Templates (<span id="visible-tpl-count"><?php echo count($localTemplates); ?></span>)
-                </h3>
-                <span id="sender-filter-desc" style="font-size:0.75rem; color:#6b7280;">Showing all synchronized templates across accounts</span>
+        <div style="background:#f8fafc; border-bottom:1px solid #e5e7eb; padding:16px 20px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:12px;">
+                <div>
+                    <h3 id="table-title" style="margin:0; font-size:1.05rem; font-weight:800; color:#1f2937;">
+                        <i class="fas fa-layer-group" style="color:<?php echo $selectedAccountId === 3 ? '#7c3aed' : '#059669'; ?>; margin-right:6px;"></i>
+                        Showing <span id="visible-tpl-count"><?php echo count($localTemplates); ?></span> templates for <?php echo htmlspecialchars($selectedAcc['display_name'] ?? "Account {$selectedAccountId}"); ?>
+                    </h3>
+                    <span id="sender-filter-desc" style="font-size:0.75rem; color:#6b7280;">
+                        WABA: <code style="font-weight:700; color:#1e293b;"><?php echo htmlspecialchars($selectedAcc['waba_id'] ?? ''); ?></code> &bull; Phone: <?php echo htmlspecialchars($selectedAcc['phone_number'] ?? ''); ?> &bull; Strictly isolated account scope
+                    </span>
+                </div>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <a href="?tab=sync&account_id=3" class="btn btn-sm <?php echo $selectedAccountId === 3 ? 'btn-primary' : 'btn-outline'; ?>" style="border-radius:8px; font-weight:700; font-size:0.75rem; padding:6px 12px;">
+                        <i class="fab fa-whatsapp"></i> PEPP Updates (<?php echo $notifTotalCount; ?>)
+                    </a>
+                    <a href="?tab=sync&account_id=1" class="btn btn-sm <?php echo $selectedAccountId === 1 ? 'btn-primary' : 'btn-outline'; ?>" style="border-radius:8px; font-weight:700; font-size:0.75rem; padding:6px 12px;">
+                        <i class="fab fa-whatsapp"></i> PEPP Learning (<?php echo $admissionsTotalCount; ?>)
+                    </a>
+                </div>
             </div>
-            <!-- Quick Filter Buttons -->
-            <div style="display:flex; gap:6px;">
-                <button type="button" class="btn btn-sm" id="btn-filter-all" onclick="filterTemplatesBySender(0)" style="padding:4px 10px; border-radius:6px; font-size:0.75rem; font-weight:700; background:#f1f5f9; color:#334155; border:1px solid #cbd5e1;">All (<?php echo count($localTemplates); ?>)</button>
-                <button type="button" class="btn btn-sm" id="btn-filter-1" onclick="filterTemplatesBySender(1)" style="padding:4px 10px; border-radius:6px; font-size:0.75rem; font-weight:700; background:#fff; color:#047857; border:1px solid #a7f3d0;">PEPP Learning</button>
-                <button type="button" class="btn btn-sm" id="btn-filter-3" onclick="filterTemplatesBySender(3)" style="padding:4px 10px; border-radius:6px; font-size:0.75rem; font-weight:700; background:#fff; color:#6d28d9; border:1px solid #ddd6fe;">PEPP Updates</button>
+
+            <!-- Minimal Filter Toolbar (Phase 3) -->
+            <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; background:#fff; padding:10px 14px; border-radius:10px; border:1px solid #e2e8f0;">
+                <div style="position:relative; flex:1; min-width:200px;">
+                    <i class="fas fa-search" style="position:absolute; left:10px; top:11px; color:#94a3b8; font-size:0.8rem;"></i>
+                    <input type="text" id="tpl-search-input" oninput="filterTemplatesTable()" placeholder="Search template by name..." class="form-control" style="padding-left:32px !important; height:36px !important; font-size:0.8rem; border-radius:8px;">
+                </div>
+                <div style="min-width:140px;">
+                    <select id="tpl-category-filter" onchange="filterTemplatesTable()" class="form-control" style="height:36px !important; font-size:0.8rem; border-radius:8px;">
+                        <option value="">All Categories</option>
+                        <option value="MARKETING">Marketing</option>
+                        <option value="UTILITY">Utility</option>
+                        <option value="AUTHENTICATION">Authentication</option>
+                    </select>
+                </div>
+                <div style="min-width:140px;">
+                    <select id="tpl-status-filter" onchange="filterTemplatesTable()" class="form-control" style="height:36px !important; font-size:0.8rem; border-radius:8px;">
+                        <option value="">All Statuses</option>
+                        <option value="approved">Approved</option>
+                        <option value="pending">Pending</option>
+                        <option value="rejected">Rejected</option>
+                        <option value="draft">Draft</option>
+                    </select>
+                </div>
+                <button type="button" onclick="resetTemplateFilters()" class="btn btn-sm btn-outline" style="height:36px; padding:0 12px; font-size:0.75rem; border-radius:8px;" title="Reset Filters">
+                    <i class="fas fa-rotate-left"></i> Reset
+                </button>
             </div>
         </div>
 
@@ -1181,7 +1345,7 @@ include 'includes/admin_nav.php';
             <tbody id="templates-tbody">
                 <?php if (empty($localTemplates)): ?>
                     <tr>
-                        <td colspan="6" style="padding:30px; text-align:center; color:#9ca3af;"><i class="fas fa-layer-group" style="font-size:1.8rem; display:block; margin-bottom:8px; opacity:0.5;"></i> No templates synchronized. Click the sync button above to import.</td>
+                        <td colspan="6" style="padding:30px; text-align:center; color:#9ca3af;"><i class="fas fa-layer-group" style="font-size:1.8rem; display:block; margin-bottom:8px; opacity:0.5;"></i> No templates synchronized for this account. Click the sync button above to import.</td>
                     </tr>
                 <?php else: ?>
                     <?php foreach ($localTemplates as $tpl): ?>
@@ -1206,7 +1370,7 @@ include 'includes/admin_nav.php';
                                 ? '<span class="badge" style="background:#f5f3ff; color:#6d28d9; font-size:0.65rem; font-weight:700;"><i class="fab fa-whatsapp"></i> PEPP Updates</span>'
                                 : '<span class="badge" style="background:#ecfdf5; color:#047857; font-size:0.65rem; font-weight:700;"><i class="fab fa-whatsapp"></i> PEPP Learning</span>';
                         ?>
-                        <tr class="tpl-row tpl-sender-<?php echo $sId; ?>" data-sender="<?php echo $sId; ?>" style="border-bottom:1px solid #f3f4f6;">
+                        <tr class="tpl-row tpl-sender-<?php echo $sId; ?>" data-sender="<?php echo $sId; ?>" data-name="<?php echo htmlspecialchars(strtolower($tpl['template_name'])); ?>" data-category="<?php echo htmlspecialchars(strtoupper($tpl['category'] ?? '')); ?>" data-status="<?php echo htmlspecialchars(strtolower($tpl['status'] ?? '')); ?>" style="border-bottom:1px solid #f3f4f6;">
                             <td style="padding:12px; color:#111827;">
                                 <div style="font-weight:700; font-size:0.85rem; color:#111827;"><?php echo htmlspecialchars($tpl['template_name']); ?></div>
                                 <div style="display:flex; align-items:center; gap:6px; margin-top:3px;">
@@ -1753,11 +1917,17 @@ function onMappingTemplateChange(eventName, selectedTemplateName) {
     const container = document.getElementById('mapping-params-' + eventName);
     const previewCard = document.getElementById('mapping-preview-card-' + eventName);
 
+    const hintEl = document.getElementById('mapping-tpl-hint-' + eventName);
     if (!selectedTemplateName) {
         container.style.display = 'none';
         if (previewCard) previewCard.style.display = 'none';
+        if (hintEl) hintEl.innerHTML = '';
         container.querySelector('.params-list').innerHTML = '';
         return;
+    }
+
+    if (hintEl) {
+        hintEl.innerHTML = `Meta: <code>${selectedTemplateName}</code> &bull; <span style="color:#059669; font-weight:700;">Approved</span>`;
     }
 
     container.style.display = 'block';
@@ -1961,13 +2131,24 @@ function updatePreviews(eventName) {
     }
 }
 
-function filterTemplatesBySender(senderId) {
+function filterTemplatesTable() {
+    const search = (document.getElementById('tpl-search-input') ? document.getElementById('tpl-search-input').value : '').trim().toLowerCase();
+    const category = (document.getElementById('tpl-category-filter') ? document.getElementById('tpl-category-filter').value : '').toUpperCase();
+    const status = (document.getElementById('tpl-status-filter') ? document.getElementById('tpl-status-filter').value : '').toLowerCase();
+
     const rows = document.querySelectorAll('.tpl-row');
     let visibleCount = 0;
 
     rows.forEach(r => {
-        const rSender = parseInt(r.getAttribute('data-sender') || '1', 10);
-        if (senderId === 0 || rSender === senderId) {
+        const name = (r.getAttribute('data-name') || '').toLowerCase();
+        const cat = (r.getAttribute('data-category') || '').toUpperCase();
+        const st = (r.getAttribute('data-status') || '').toLowerCase();
+
+        const matchSearch = !search || name.includes(search);
+        const matchCat = !category || cat === category;
+        const matchStatus = !status || st === status;
+
+        if (matchSearch && matchCat && matchStatus) {
             r.style.display = '';
             visibleCount++;
         } else {
@@ -1977,39 +2158,21 @@ function filterTemplatesBySender(senderId) {
 
     const countSpan = document.getElementById('visible-tpl-count');
     if (countSpan) countSpan.innerText = visibleCount;
+}
 
-    const descSpan = document.getElementById('sender-filter-desc');
-    if (descSpan) {
-        if (senderId === 1) {
-            descSpan.innerText = 'Showing PEPP Learning templates only (WABA: 1410328164305566)';
-        } else if (senderId === 3) {
-            descSpan.innerText = 'Showing PEPP Updates templates only (WABA: 1099020233033644)';
-        } else {
-            descSpan.innerText = 'Showing all synchronized templates across accounts';
-        }
+function resetTemplateFilters() {
+    if (document.getElementById('tpl-search-input')) document.getElementById('tpl-search-input').value = '';
+    if (document.getElementById('tpl-category-filter')) document.getElementById('tpl-category-filter').value = '';
+    if (document.getElementById('tpl-status-filter')) document.getElementById('tpl-status-filter').value = '';
+    filterTemplatesTable();
+}
+
+function filterTemplatesBySender(senderId) {
+    if (senderId === 1 || senderId === 3) {
+        window.location.href = `?tab=sync&account_id=${senderId}`;
+    } else {
+        window.location.href = `?tab=sync`;
     }
-
-    // Update filter button styles
-    ['all', '1', '3'].forEach(k => {
-        const btn = document.getElementById('btn-filter-' + k);
-        if (!btn) return;
-        const isCurrent = (k === 'all' && senderId === 0) || (k === String(senderId));
-        if (isCurrent) {
-            btn.style.background = (k === '1') ? '#ecfdf5' : (k === '3' ? '#f5f3ff' : '#f1f5f9');
-            btn.style.borderColor = (k === '1') ? '#059669' : (k === '3' ? '#7c3aed' : '#475569');
-            btn.style.boxShadow = '0 1px 2px rgba(0,0,0,0.05)';
-        } else {
-            btn.style.background = '#fff';
-            btn.style.borderColor = '#e2e8f0';
-            btn.style.boxShadow = 'none';
-        }
-    });
-
-    // Update sender cards border
-    const card1 = document.getElementById('sender-card-1');
-    const card3 = document.getElementById('sender-card-3');
-    if (card1) card1.style.border = (senderId === 1) ? '2.5px solid #059669' : '1.5px solid #e5e7eb';
-    if (card3) card3.style.border = (senderId === 3) ? '2.5px solid #7c3aed' : '1.5px solid #e5e7eb';
 }
 
 function onTestTemplateSelect(selectEl) {
