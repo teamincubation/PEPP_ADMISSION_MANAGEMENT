@@ -560,6 +560,27 @@ function render_nav_item($key, $active_page, $nav_data) {
                 echo '<a class="nav-item ' . nav_active('email-reports', $active_page) . '" href="email-reports.php"><i class="fas fa-envelope-open-text"></i> Email Reports</a>';
             }
             break;
+        case 'pepp-updates':
+            echo '<a class="nav-item ' . nav_active('pepp-updates', $active_page) . '" href="pepp-updates.php"><i class="fas fa-gauge-high"></i> Dashboard</a>';
+            break;
+        case 'pepp-updates-posts':
+            echo '<a class="nav-item ' . nav_active('pepp-updates-posts', $active_page) . '" href="pepp-updates-posts.php"><i class="fas fa-newspaper"></i> Updates</a>';
+            break;
+        case 'pepp-updates-categories':
+            echo '<a class="nav-item ' . nav_active('pepp-updates-categories', $active_page) . '" href="pepp-updates-categories.php"><i class="fas fa-folder-tree"></i> Categories</a>';
+            break;
+        case 'pepp-updates-keywords':
+            echo '<a class="nav-item ' . nav_active('pepp-updates-keywords', $active_page) . '" href="pepp-updates-keywords.php"><i class="fas fa-tags"></i> Keywords</a>';
+            break;
+        case 'pepp-updates-subscribers':
+            echo '<a class="nav-item ' . nav_active('pepp-updates-subscribers', $active_page) . '" href="pepp-updates-subscribers.php"><i class="fas fa-users-viewfinder"></i> Subscribers</a>';
+            break;
+        case 'pepp-updates-campaigns':
+            echo '<a class="nav-item ' . nav_active('pepp-updates-campaigns', $active_page) . '" href="pepp-updates-campaigns.php"><i class="fas fa-paper-plane"></i> Delivery Campaigns</a>';
+            break;
+        case 'pepp-updates-settings':
+            echo '<a class="nav-item ' . nav_active('pepp-updates-settings', $active_page) . '" href="pepp-updates-settings.php"><i class="fas fa-sliders"></i> Settings</a>';
+            break;
     }
 }
 
@@ -570,6 +591,12 @@ $default_sidebar = [
         'title' => 'Overview',
         'icon' => 'fas fa-gauge-high',
         'items' => ['dashboard', 'task-reminders']
+    ],
+    [
+        'id' => 'pepp-updates',
+        'title' => 'PEPP Updates',
+        'icon' => 'fas fa-newspaper',
+        'items' => ['pepp-updates', 'pepp-updates-posts', 'pepp-updates-categories', 'pepp-updates-keywords', 'pepp-updates-subscribers', 'pepp-updates-campaigns', 'pepp-updates-settings']
     ],
     [
         'id' => 'registrations',
@@ -829,8 +856,23 @@ $nav_data = [
             background: rgba(148, 163, 184, 0.32) !important;
             color: #ffffff !important;
         }
-        html.theme-sepia .nav-section-label.cat-overview {
-            color: #433422 !important;
+        .nav-section-label.cat-pepp-updates {
+            background: rgba(124, 58, 237, 0.12) !important;
+            color: #6d28d9 !important;
+            border-radius: 6px;
+            margin-bottom: 4px;
+        }
+        .nav-section-label.cat-pepp-updates:hover {
+            background: rgba(124, 58, 237, 0.22) !important;
+            color: #4c1d95 !important;
+        }
+        html.theme-dark .nav-section-label.cat-pepp-updates {
+            background: rgba(139, 92, 246, 0.2) !important;
+            color: #ddd6fe !important;
+        }
+        html.theme-dark .nav-section-label.cat-pepp-updates:hover {
+            background: rgba(139, 92, 246, 0.3) !important;
+            color: #ffffff !important;
         }
 
         .nav-section-label.cat-registrations {

@@ -84,6 +84,13 @@ $GLOBALS['ADMIN_PAGES'] = [
     'task-reminders'      => ['Task Reminders',      'fa-bell'],
     'student-birthdays'   => ['Student Birthdays',   'fa-cake-candles'],
     'settings'      => ['Settings',                'fa-gear'],
+    'pepp-updates'             => ['PEPP Updates Dashboard',   'fa-newspaper'],
+    'pepp-updates-posts'       => ['PEPP Updates Posts',       'fa-newspaper'],
+    'pepp-updates-categories'  => ['PEPP Updates Categories',  'fa-folder-tree'],
+    'pepp-updates-keywords'    => ['PEPP Updates Keywords',    'fa-tags'],
+    'pepp-updates-subscribers' => ['PEPP Updates Subscribers', 'fa-users-viewfinder'],
+    'pepp-updates-campaigns'   => ['PEPP Updates Campaigns',   'fa-paper-plane'],
+    'pepp-updates-settings'    => ['PEPP Updates Settings',    'fa-sliders'],
 ];
 
 /* ── Does the multi-admin system exist yet? (graceful pre-migration mode) ── */
@@ -569,6 +576,9 @@ function can_access($page_key) {
     if (($page_key === 'whatsapp-inbox' || $page_key === 'whatsapp-marketing-templates') && in_array('communication', $perms, true)) {
         return true;
     }
+    if (strpos($page_key, 'pepp-updates') === 0 && (in_array('pepp-updates', $perms, true) || in_array('marketing', $perms, true))) {
+        return true;
+    }
     return in_array($page_key, $perms, true);
 }
 function get_first_accessible_page_url() {
@@ -610,6 +620,7 @@ function get_first_accessible_page_url() {
         'student-mentoring'   => 'student-mentoring.php',
         'settings'      => 'settings.php',
         'email-campaigns' => 'email-campaigns.php',
+        'pepp-updates'  => 'pepp-updates.php',
     ];
     $perms = array_map('trim', explode(',', $admin_perms));
     foreach ($page_urls as $key => $url) {
