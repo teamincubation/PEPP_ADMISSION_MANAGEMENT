@@ -592,6 +592,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     
                                     $recipientName = $contactName;
                                     
+                                    // Authoritative sender context strictly bound to the verified inbound receiving account
+                                    $senderKeyToUse = $receivingAccount['sender_key'] ?? null;
+                                    if (!$senderKeyToUse && !empty($receivingAccountId)) {
+                                        $rAcc = $accountResolver->getAccount($receivingAccountId);
+                                        $senderKeyToUse = $rAcc['sender_key'] ?? null;
+                                    }
+
                                     $queueId = $engine->queueMessage(
                                         'whatsapp',
                                         $cleanFrom,
@@ -604,7 +611,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                         'system_auto_reply',
                                         null,
                                         $studentUid,
-                                        'auto_reply_button'
+                                        'auto_reply_button',
+                                        null,
+                                        $senderKeyToUse
                                     );
                                     
                                     if ($queueId) {

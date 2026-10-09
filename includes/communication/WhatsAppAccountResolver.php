@@ -225,7 +225,7 @@ class WhatsAppAccountResolver {
     /**
      * Resolves appropriate sender account for a specific system event name.
      */
-    public function resolveAccountForEvent(?string $eventName): array {
+    public function resolveAccountForEvent(?string $eventName): ?array {
         $cleanEvent = strtolower(trim((string)$eventName));
         if ($cleanEvent === '') {
             return $this->getDefaultAccount();
@@ -261,6 +261,14 @@ class WhatsAppAccountResolver {
             if ($notifAcc) {
                 return $notifAcc;
             }
+        }
+
+        // Interactive quick-reply auto response events MUST NEVER silently default to Account 1
+        // because the appropriate sender account is strictly bound to the receiving account of the inbound interaction.
+        // If sender context was not provided and cannot be safely determined, fail safely (return null)
+        // so the queue does not dispatch cross-account replies.
+        if ($cleanEvent === 'auto_reply_button' || $cleanEvent === 'auto_reply') {
+            return null;
         }
 
         // Faculty-session events (faculty_session_*) and admissions/transactional events default to Account 1 (PEPP Learning):

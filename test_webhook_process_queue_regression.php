@@ -423,21 +423,23 @@ $mockProvider = new class implements CommunicationProviderInterface {
 };
 $engine->mockProvider = $mockProvider;
 
-// Seed a pending queue message for active student STU001
-$queueId = $engine->queueMessage(
-    'whatsapp',
-    '919876543210',
-    'Alice Active',
-    'Auto-Reply Test',
-    '<p>Confirmation</p>',
-    'Confirmation',
-    [],
-    ['name' => 'pepp_auto_reply_confirmation', 'language' => 'en_US', 'parameters' => []],
-    'system_auto_reply',
-    null,
-    'STU001',
-    'auto_reply_button'
-);
+    $studentUid = 'STU001';
+    $queueId = $engine->queueMessage(
+        'whatsapp',
+        '919876543210',
+        'Alice Active',
+        'Auto-Reply Test',
+        '<p>Confirmation</p>',
+        'Confirmation',
+        [],
+        ['name' => 'pepp_auto_reply_confirmation', 'language' => 'en_US', 'parameters' => []],
+        'system_auto_reply',
+        null,
+        'STU001',
+        'auto_reply_button',
+        null,
+        'admissions'
+    );
 
 assertTest("Direct queue item created (Queue ID: {$queueId})", $queueId > 0);
 

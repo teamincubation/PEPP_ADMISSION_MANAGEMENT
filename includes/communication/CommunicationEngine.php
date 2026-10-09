@@ -366,7 +366,16 @@ class CommunicationEngine {
             } else {
                 if (!empty($eventName)) {
                     $acc = $this->resolveSenderAccountForEvent($eventName);
-                    $senderAccountId = $acc ? (int)$acc['id'] : 1;
+                    if ($acc) {
+                        $senderAccountId = (int)$acc['id'];
+                    } elseif ($eventName === 'auto_reply_button' || $eventName === 'auto_reply') {
+                        $status = 'failed';
+                        $errorMsg = 'Unresolved WhatsApp sender account for auto-reply: missing receiving sender context';
+                        $retryCount = 3;
+                        $senderAccountId = null;
+                    } else {
+                        $senderAccountId = 1;
+                    }
                 } else {
                     $defaultAcc = $this->getWhatsAppAccount();
                     $senderAccountId = $defaultAcc ? (int)$defaultAcc['id'] : 1;
@@ -1203,6 +1212,8 @@ class CommunicationEngine {
                         throw new Exception("Configured WhatsApp account '{$displayName}' does not have a Meta Phone Number ID configured.");
                     }
                     $provider = $this->getProvider($channel, $senderAccount);
+                } elseif (in_array($eventName, ['auto_reply_button', 'auto_reply'], true)) {
+                    throw new Exception("Auto-reply queue item #{$queueId} lacks an authoritative sender account. Silent Account 1 fallback blocked.");
                 } else {
                     // Legacy message without sender specified -> default admissions account fallback allowed
                     $provider = $this->getProvider($channel, null);
