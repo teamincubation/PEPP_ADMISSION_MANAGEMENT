@@ -37,3 +37,6 @@ config/activity_exports/*
 # Temporary scratch directory
 scratch/
 *.sqlite
+
+# Public Updates Portal production credentials (never commit)
+public_updates/includes/db_config.php
