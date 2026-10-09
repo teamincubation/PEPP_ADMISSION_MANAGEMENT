@@ -1,0 +1,19 @@
+# PEPP Updates — robots.txt
+User-agent: *
+Allow: /
+Allow: /update/
+Allow: /category/
+Allow: /categories
+Allow: /subscribe
+Allow: /privacy
+Allow: /terms
+Allow: /assets/
+
+# Disallow internal scripts & administrative paths
+Disallow: /includes/
+Disallow: /config/
+Disallow: /search
+Disallow: /search.php
+
+# Dynamic XML Sitemap
+Sitemap: https://updates.pepplearning.in/sitemap.xml

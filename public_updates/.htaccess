@@ -1,0 +1,39 @@
+# ============================================================
+# PEPP Updates Public Subdomain (.htaccess)
+# Document Root: /public_html/updates/
+# ============================================================
+
+Options -Indexes
+ServerSignature Off
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /
+
+    # 1. Protect internal PHP includes
+    RewriteRule ^includes/ - [F,L]
+
+    # 2. Dynamic Sitemap
+    RewriteRule ^sitemap\.xml$ sitemap.php [L]
+
+    # 3. Clean Portal Routes
+    RewriteRule ^update/([a-zA-Z0-9_-]+)/?$ update.php?slug=$1 [QSA,L]
+    RewriteRule ^category/([a-zA-Z0-9_-]+)/?$ category.php?slug=$1 [QSA,L]
+    RewriteRule ^categories/?$ categories.php [QSA,L]
+    RewriteRule ^search/?$ search.php [QSA,L]
+    RewriteRule ^subscribe/?$ subscribe.php [QSA,L]
+    RewriteRule ^privacy/?$ privacy.php [QSA,L]
+    RewriteRule ^terms/?$ terms.php [QSA,L]
+
+    # 4. Standard file/dir fallback (does not break direct PHP access)
+    RewriteCond %{REQUEST_FILENAME} -f [OR]
+    RewriteCond %{REQUEST_FILENAME} -d
+    RewriteRule ^ - [L]
+
+    # 5. Route missing requests to 404.php
+    RewriteRule ^ 404.php [L]
+</IfModule>
+
+# Custom Error Pages
+ErrorDocument 404 /404.php
+ErrorDocument 500 /500.php
