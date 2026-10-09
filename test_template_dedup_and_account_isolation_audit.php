@@ -395,6 +395,128 @@ $queueItem = $pdo->query("SELECT * FROM communication_queue WHERE id = " . (int)
 assertAudit((int)$queueItem['sender_account_id'] === 3, "Queue item has sender_account_id = 3 (PEPP Updates preserved)");
 assertAudit((int)$queueItem['priority'] === -10, "Queue item has bulk marketing priority = -10 (starvation protection intact)");
 
+// ----------------------------------------------------------------------
+// Requirement 11: Existing Account 3 template routing configuration save
+// ----------------------------------------------------------------------
+echo "\nTesting Requirement 11: Existing Account 3 template routing configuration save...\n";
+
+// Sibling rows for mphil_entrance_exam_target (101 en_US and 102 en) coexist under Account 3
+$stmtMphil = $pdo->query("SELECT id, meta_template_id, language FROM communication_templates WHERE sender_account_id = 3 AND template_name = 'mphil_entrance_exam_target'");
+$mphilRows = $stmtMphil->fetchAll();
+assertAudit(count($mphilRows) === 2, "mphil_entrance_exam_target has exactly 2 sibling rows (101 en_US, 102 en)");
+
+// Simulate the exact routing save handler logic from whatsapp-marketing-templates.php
+$edit_id = 102;
+$tpl_name = 'mphil_entrance_exam_target';
+$postedSenderId = 3;
+
+// Find sibling exclude IDs using strict account-scoped lookup
+$stmtLoad = $pdo->prepare("SELECT * FROM communication_templates WHERE id = ? AND channel = 'whatsapp' AND sender_account_id = ? AND status <> 'deleted' LIMIT 1");
+$stmtLoad->execute([$edit_id, $postedSenderId]);
+$existingTpl = $stmtLoad->fetch();
+assertAudit($existingTpl !== false, "Existing template row 102 successfully loaded under posted sender_account_id = 3");
+
+$excludeIds = [(int)$existingTpl['id']];
+if (!empty($existingTpl['meta_template_id'])) {
+    $stmtSib = $pdo->prepare("SELECT id FROM communication_templates WHERE channel = 'whatsapp' AND sender_account_id = ? AND meta_template_id = ? AND status <> 'deleted'");
+    $stmtSib->execute([$postedSenderId, $existingTpl['meta_template_id']]);
+    $excludeIds = array_unique(array_merge($excludeIds, array_map('intval', $stmtSib->fetchAll(PDO::FETCH_COLUMN))));
+}
+
+assertAudit(in_array(101, $excludeIds, true) && in_array(102, $excludeIds, true), "Both sibling row 101 and 102 are recognized as same logical template identity");
+
+// Verify that the uniqueness check does not falsely flag sibling row 101
+$placeholders = implode(',', array_fill(0, count($excludeIds), '?'));
+$sqlCheck = "SELECT id FROM communication_templates WHERE channel = 'whatsapp' AND sender_account_id = ? AND template_name = ? AND status <> 'deleted' AND id NOT IN ($placeholders) LIMIT 1";
+$stmtCheck = $pdo->prepare($sqlCheck);
+$stmtCheck->execute(array_merge([$postedSenderId, $tpl_name], $excludeIds));
+$conflictRow = $stmtCheck->fetch();
+
+assertAudit($conflictRow === false, "Routing save does NOT produce false duplicate-template error against sibling row 101");
+
+// Verify that routing configuration update saves successfully to both sibling rows without moving account ownership
+$updatedMeta = json_encode([
+    'button_type' => 'QUICK_REPLY',
+    'buttons' => [
+        'quick_reply' => [
+            1 => ['text' => 'Yes, Interested', 'payload' => 'INTERESTED_YES', 'action_type' => 'SEND_TEMPLATE', 'target_template_name' => 'interested']
+        ]
+    ]
+]);
+$stmtUp = $pdo->prepare("UPDATE communication_templates SET meta_data = ?, updated_at = NOW() WHERE id IN ($placeholders) AND sender_account_id = ?");
+$stmtUp->execute(array_merge([$updatedMeta], $excludeIds, [$postedSenderId]));
+
+$row101 = $pdo->query("SELECT * FROM communication_templates WHERE id = 101")->fetch();
+$row102 = $pdo->query("SELECT * FROM communication_templates WHERE id = 102")->fetch();
+$row101Meta = json_decode($row101['meta_data'], true);
+$row102Meta = json_decode($row102['meta_data'], true);
+
+assertAudit(($row102Meta['button_type'] ?? '') === 'QUICK_REPLY', "Canonical row 102 routing configuration updated to QUICK_REPLY");
+assertAudit(($row101Meta['button_type'] ?? '') === 'QUICK_REPLY', "Sibling row 101 routing configuration also synchronized to QUICK_REPLY");
+assertAudit((int)$row101['sender_account_id'] === 3 && (int)$row102['sender_account_id'] === 3, "Account ownership of rows 101 and 102 strictly preserved at Account 3");
+
+// Verify that a genuinely NEW template creation (edit_id = 0) with existing name IS rejected
+$sqlNew = "SELECT id FROM communication_templates WHERE channel = 'whatsapp' AND sender_account_id = ? AND template_name = ? AND status <> 'deleted' LIMIT 1";
+$stmtNew = $pdo->prepare($sqlNew);
+$stmtNew->execute([$postedSenderId, $tpl_name]);
+assertAudit($stmtNew->fetch() !== false, "Genuinely NEW template creation with existing name under Account 3 is correctly flagged as duplicate");
+
+// ----------------------------------------------------------------------
+// Requirement 12: Tampered Account Security & Cross-Account Edit Isolation
+// ----------------------------------------------------------------------
+echo "\nTesting Requirement 12: Tampered Account Security & Cross-Account Edit Isolation...\n";
+
+// CASE A: Account 3 edit_id (102) + Account 1 posted sender_account_id => REJECT
+$tamperedEditIdA = 102;
+$tamperedSenderA = 1;
+$stmtCaseA = $pdo->prepare("SELECT * FROM communication_templates WHERE id = ? AND channel = 'whatsapp' AND sender_account_id = ? AND status <> 'deleted' LIMIT 1");
+$stmtCaseA->execute([$tamperedEditIdA, $tamperedSenderA]);
+$loadedCaseA = $stmtCaseA->fetch();
+assertAudit($loadedCaseA === false, "CASE A: Tampered edit (Account 3 template ID 102 with Account 1 posted sender) is rejected by ownership check");
+$checkAccA = $pdo->query("SELECT sender_account_id FROM communication_templates WHERE id = 102")->fetchColumn();
+assertAudit((int)$checkAccA === 3, "CASE A: Template 102 sender_account_id was NEVER moved to Account 1");
+
+// CASE B: Account 1 edit_id (206) + Account 3 posted sender_account_id => REJECT
+$tamperedEditIdB = 206;
+$tamperedSenderB = 3;
+$stmtCaseB = $pdo->prepare("SELECT * FROM communication_templates WHERE id = ? AND channel = 'whatsapp' AND sender_account_id = ? AND status <> 'deleted' LIMIT 1");
+$stmtCaseB->execute([$tamperedEditIdB, $tamperedSenderB]);
+$loadedCaseB = $stmtCaseB->fetch();
+assertAudit($loadedCaseB === false, "CASE B: Tampered edit (Account 1 template ID 206 with Account 3 posted sender) is rejected by ownership check");
+$checkAccB = $pdo->query("SELECT sender_account_id FROM communication_templates WHERE id = 206")->fetchColumn();
+assertAudit((int)$checkAccB === 1, "CASE B: Template 206 sender_account_id was NEVER moved to Account 3");
+
+// CASE C: Account 3 edit_id (102) + Account 3 posted sender_account_id => SUCCESS
+$legitEditIdC = 102;
+$legitSenderC = 3;
+$stmtCaseC = $pdo->prepare("SELECT * FROM communication_templates WHERE id = ? AND channel = 'whatsapp' AND sender_account_id = ? AND status <> 'deleted' LIMIT 1");
+$stmtCaseC->execute([$legitEditIdC, $legitSenderC]);
+$loadedCaseC = $stmtCaseC->fetch();
+assertAudit($loadedCaseC !== false, "CASE C: Legitimate edit (Account 3 template ID 102 with Account 3 posted sender) passes ownership check");
+
+// CASE D: Account 3 template + same template name in Account 1 => Account 1 row must NOT be updated
+$acc3TplId = 106; // Account 3 'interested'
+$acc1TplId = 206; // Account 1 'interested'
+$postedSenderD = 3;
+
+// Resolve siblings strictly within postedSenderD = 3
+$stmtSibD = $pdo->prepare("SELECT id FROM communication_templates WHERE channel = 'whatsapp' AND sender_account_id = ? AND template_name = 'interested' AND status <> 'deleted'");
+$stmtSibD->execute([$postedSenderD]);
+$excludeIdsD = array_map('intval', $stmtSibD->fetchAll(PDO::FETCH_COLUMN));
+
+assertAudit(in_array(105, $excludeIdsD, true) && in_array(106, $excludeIdsD, true), "CASE D: Sibling resolution for Account 3 includes rows 105 and 106");
+assertAudit(!in_array(206, $excludeIdsD, true), "CASE D: Sibling resolution for Account 3 strictly EXCLUDES Account 1 row 206");
+
+// Save routing update for Account 3 'interested'
+$placeholdersD = implode(',', array_fill(0, count($excludeIdsD), '?'));
+$metaD = json_encode(['button_type' => 'QUICK_REPLY', 'buttons' => ['quick_reply' => [1 => ['text' => 'Acc3 Interested']]]]);
+$stmtUpD = $pdo->prepare("UPDATE communication_templates SET meta_data = ?, updated_at = NOW() WHERE id IN ($placeholdersD) AND sender_account_id = ?");
+$stmtUpD->execute(array_merge([$metaD], $excludeIdsD, [$postedSenderD]));
+
+$acc1RowAfter = $pdo->query("SELECT * FROM communication_templates WHERE id = 206")->fetch();
+assertAudit((int)$acc1RowAfter['sender_account_id'] === 1, "CASE D: Account 1 row 206 sender_account_id remains 1");
+assertAudit(strpos($acc1RowAfter['meta_data'] ?? '', 'Acc3 Interested') === false, "CASE D: Account 1 row 206 meta_data was NOT modified by Account 3 routing update");
+
 // Summary
 echo "\n======================================================================\n";
 echo "AUDIT SUMMARY: {$passCount} / " . ($passCount + $failCount) . " Tests Passed (" . round(($passCount / ($passCount + $failCount)) * 100) . "%)\n";

@@ -178,6 +178,77 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $buttons_input = $_POST['buttons'] ?? [];
             $var_examples = $_POST['examples'] ?? [];
 
+            // Load existing template if editing to strictly validate ownership and identify sibling duplicate rows
+            $existingTemplate = null;
+            $excludeIds = [];
+            $hasCols = $resolver->hasTemplateAccountColumns();
+            if ($edit_id > 0) {
+                if ($hasCols) {
+                    $stmtLoad = $pdo->prepare("SELECT * FROM communication_templates WHERE id = ? AND channel = 'whatsapp' AND sender_account_id = ? AND status <> 'deleted' LIMIT 1");
+                    $stmtLoad->execute([$edit_id, $postedSenderId]);
+                } else {
+                    $stmtLoad = $pdo->prepare("SELECT * FROM communication_templates WHERE id = ? AND channel = 'whatsapp' AND status <> 'deleted' LIMIT 1");
+                    $stmtLoad->execute([$edit_id]);
+                }
+                $loadedRow = $stmtLoad->fetch(PDO::FETCH_ASSOC);
+                if ($loadedRow) {
+                    $normLoaded = $resolver->normalizeTemplateRow($loadedRow);
+                    if ((int)$normLoaded['sender_account_id'] === $postedSenderId) {
+                        $existingTemplate = $loadedRow;
+                    }
+                }
+
+                if (!$existingTemplate) {
+                    $senderAccName = $allAccounts[$postedSenderId]['account_name'] ?? "Account #{$postedSenderId}";
+                    $error_message = "Invalid template edit request: template #{$edit_id} does not exist or does not belong to {$senderAccName}.";
+                } else {
+                    $excludeIds[] = (int)$existingTemplate['id'];
+                    // Exclude sibling duplicate rows by meta_template_id strictly within the SAME sender account
+                    if (!empty($existingTemplate['meta_template_id'])) {
+                        if ($hasCols) {
+                            $stmtSib = $pdo->prepare("SELECT id FROM communication_templates WHERE channel = 'whatsapp' AND sender_account_id = ? AND meta_template_id = ? AND status <> 'deleted'");
+                            $stmtSib->execute([$postedSenderId, $existingTemplate['meta_template_id']]);
+                            $excludeIds = array_unique(array_merge($excludeIds, array_map('intval', $stmtSib->fetchAll(PDO::FETCH_COLUMN))));
+                        } else {
+                            $stmtSib = $pdo->prepare("SELECT * FROM communication_templates WHERE channel = 'whatsapp' AND meta_template_id = ? AND status <> 'deleted'");
+                            $stmtSib->execute([$existingTemplate['meta_template_id']]);
+                            while ($sRow = $stmtSib->fetch(PDO::FETCH_ASSOC)) {
+                                $sNorm = $resolver->normalizeTemplateRow($sRow);
+                                if ((int)$sNorm['sender_account_id'] === $postedSenderId) {
+                                    $excludeIds[] = (int)$sRow['id'];
+                                }
+                            }
+                            $excludeIds = array_unique($excludeIds);
+                        }
+                    }
+                    // Exclude sibling duplicate rows by template_name + language_family strictly within the SAME sender account
+                    if (!empty($existingTemplate['template_name'])) {
+                        $currLangFamily = WhatsAppAccountResolver::normalizeLanguageFamily($existingTemplate['language'] ?? 'en');
+                        if ($hasCols) {
+                            $stmtNameSib = $pdo->prepare("SELECT id, language FROM communication_templates WHERE channel = 'whatsapp' AND sender_account_id = ? AND template_name = ? AND status <> 'deleted'");
+                            $stmtNameSib->execute([$postedSenderId, $existingTemplate['template_name']]);
+                            while ($sRow = $stmtNameSib->fetch(PDO::FETCH_ASSOC)) {
+                                if (WhatsAppAccountResolver::normalizeLanguageFamily($sRow['language'] ?? 'en') === $currLangFamily) {
+                                    $excludeIds[] = (int)$sRow['id'];
+                                }
+                            }
+                            $excludeIds = array_unique($excludeIds);
+                        } else {
+                            $stmtNameSib = $pdo->prepare("SELECT * FROM communication_templates WHERE channel = 'whatsapp' AND template_name = ? AND status <> 'deleted'");
+                            $stmtNameSib->execute([$existingTemplate['template_name']]);
+                            while ($sRow = $stmtNameSib->fetch(PDO::FETCH_ASSOC)) {
+                                $sNorm = $resolver->normalizeTemplateRow($sRow);
+                                if ((int)$sNorm['sender_account_id'] === $postedSenderId && WhatsAppAccountResolver::normalizeLanguageFamily($sRow['language'] ?? 'en') === $currLangFamily) {
+                                    $excludeIds[] = (int)$sRow['id'];
+                                }
+                            }
+                            $excludeIds = array_unique($excludeIds);
+                        }
+                    }
+                }
+            }
+            $isRoutingMode = ($existingTemplate && ($existingTemplate['status'] ?? '') !== 'draft');
+
             // Secure server-side validation and upload for Image Header
             if ($header_type === 'IMAGE') {
                 if (isset($_FILES['header_image']) && $_FILES['header_image']['error'] === UPLOAD_ERR_OK) {
@@ -219,7 +290,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
 
             // Server-side Validations
-            if (!preg_match('/^[a-z0-9_]+$/', $tpl_name)) {
+            if (!empty($error_message)) {
+                // Halt on previous errors (e.g. invalid account ownership or image upload error)
+            } elseif (!preg_match('/^[a-z0-9_]+$/', $tpl_name)) {
                 $error_message = 'Template name must contain only lowercase letters, numbers, and underscores.';
             } elseif (strlen($tpl_name) > 512) {
                 $error_message = 'Template name is too long.';
@@ -227,23 +300,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $error_message = 'Template body text cannot be empty.';
             } else {
                 // Check local duplicate template name scoped to sender account
-                $hasCols = $resolver->hasTemplateAccountColumns();
                 $isDuplicate = false;
-                if ($hasCols) {
-                    $stmtCheck = $pdo->prepare("SELECT id FROM communication_templates WHERE channel = 'whatsapp' AND sender_account_id = ? AND template_name = ? AND id <> ? AND status <> 'deleted' LIMIT 1");
-                    $stmtCheck->execute([$postedSenderId, $tpl_name, $edit_id]);
-                    if ($stmtCheck->fetch()) {
-                        $isDuplicate = true;
-                    }
+                if ($isRoutingMode && $existingTemplate) {
+                    // In Routing Configuration Mode, template is already approved/pending on Meta and name cannot be changed.
+                    // Routing updates on an existing template never trigger duplicate template name conflicts.
+                    $isDuplicate = false;
                 } else {
-                    $stmtCheck = $pdo->prepare("SELECT * FROM communication_templates WHERE channel = 'whatsapp' AND template_name = ? AND id <> ? AND status <> 'deleted'");
-                    $stmtCheck->execute([$tpl_name, $edit_id]);
-                    $cands = $stmtCheck->fetchAll();
-                    foreach ($cands as $cand) {
-                        $cNorm = $resolver->normalizeTemplateRow($cand);
-                        if ((int)$cNorm['sender_account_id'] === $postedSenderId) {
+                    $hasCols = $resolver->hasTemplateAccountColumns();
+                    if ($hasCols) {
+                        $sqlCheck = "SELECT id FROM communication_templates WHERE channel = 'whatsapp' AND sender_account_id = ? AND template_name = ? AND status <> 'deleted'";
+                        $paramsCheck = [$postedSenderId, $tpl_name];
+                        if (!empty($excludeIds)) {
+                            $placeholders = implode(',', array_fill(0, count($excludeIds), '?'));
+                            $sqlCheck .= " AND id NOT IN ($placeholders)";
+                            $paramsCheck = array_merge($paramsCheck, $excludeIds);
+                        }
+                        $sqlCheck .= " LIMIT 1";
+                        $stmtCheck = $pdo->prepare($sqlCheck);
+                        $stmtCheck->execute($paramsCheck);
+                        if ($stmtCheck->fetch()) {
                             $isDuplicate = true;
-                            break;
+                        }
+                    } else {
+                        $sqlCheck = "SELECT * FROM communication_templates WHERE channel = 'whatsapp' AND template_name = ? AND status <> 'deleted'";
+                        $paramsCheck = [$tpl_name];
+                        if (!empty($excludeIds)) {
+                            $placeholders = implode(',', array_fill(0, count($excludeIds), '?'));
+                            $sqlCheck .= " AND id NOT IN ($placeholders)";
+                            $paramsCheck = array_merge($paramsCheck, $excludeIds);
+                        }
+                        $stmtCheck = $pdo->prepare($sqlCheck);
+                        $stmtCheck->execute($paramsCheck);
+                        $cands = $stmtCheck->fetchAll();
+                        foreach ($cands as $cand) {
+                            $cNorm = $resolver->normalizeTemplateRow($cand);
+                            if ((int)$cNorm['sender_account_id'] === $postedSenderId) {
+                                $isDuplicate = true;
+                                break;
+                            }
                         }
                     }
                 }
@@ -465,31 +559,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                         
                                         $meta_data_to_save = json_encode($existMeta);
                                         
+                                        // Update canonical row and all sibling rows belonging to this template in this account
+                                        $updateIds = !empty($excludeIds) ? $excludeIds : [$edit_id];
+                                        $updatePlaceholders = implode(',', array_fill(0, count($updateIds), '?'));
+
+                                        // In Routing Configuration Mode, do NOT alter sender_account_id or waba_id; update only routing metadata
                                         if ($hasCols) {
                                             $stmtUpdate = $pdo->prepare("
                                                 UPDATE communication_templates 
-                                                SET sender_account_id = ?, waba_id = ?, meta_data = ?, updated_at = NOW()
-                                                WHERE id = ?
+                                                SET meta_data = ?, updated_at = NOW()
+                                                WHERE id IN ($updatePlaceholders) AND sender_account_id = ?
                                             ");
-                                            $stmtUpdate->execute([$postedSenderId, $targetWabaId, $meta_data_to_save, $edit_id]);
+                                            $stmtUpdate->execute(array_merge([$meta_data_to_save], $updateIds, [$postedSenderId]));
                                         } else {
                                             $stmtUpdate = $pdo->prepare("
                                                 UPDATE communication_templates 
                                                 SET meta_data = ?, updated_at = NOW()
-                                                WHERE id = ?
+                                                WHERE id IN ($updatePlaceholders)
                                             ");
-                                            $stmtUpdate->execute([$meta_data_to_save, $edit_id]);
+                                            $stmtUpdate->execute(array_merge([$meta_data_to_save], $updateIds));
                                         }
                                         $success_message = "ERP routing configuration for template '{$tpl_name}' updated successfully.";
                                     } else {
-                                        // Local draft template: update everything
+                                        // Local draft template: update draft fields strictly scoped to this account
                                         if ($hasCols) {
                                             $stmtUpdate = $pdo->prepare("
                                                 UPDATE communication_templates 
-                                                SET sender_account_id = ?, waba_id = ?, template_name = ?, language = ?, category = ?, meta_data = ?, updated_at = NOW()
-                                                WHERE id = ?
+                                                SET template_name = ?, language = ?, category = ?, meta_data = ?, updated_at = NOW()
+                                                WHERE id = ? AND sender_account_id = ?
                                             ");
-                                            $stmtUpdate->execute([$postedSenderId, $targetWabaId, $tpl_name, $language, $category, $meta_data, $edit_id]);
+                                            $stmtUpdate->execute([$tpl_name, $language, $category, $meta_data, $edit_id, $postedSenderId]);
                                         } else {
                                             $stmtUpdate = $pdo->prepare("
                                                 UPDATE communication_templates 
@@ -563,9 +662,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                                     $stmtUpdate = $pdo->prepare("
                                                         UPDATE communication_templates 
                                                         SET sender_account_id = ?, waba_id = ?, meta_template_id = ?, template_name = ?, language = ?, status = 'pending', category = ?, meta_data = ?, updated_at = NOW()
-                                                        WHERE id = ?
+                                                        WHERE id = ? AND sender_account_id = ?
                                                     ");
-                                                    $stmtUpdate->execute([$postedSenderId, $targetWabaId, $meta_template_id, $tpl_name, $language, $category, $meta_data_updated, $edit_id]);
+                                                    $stmtUpdate->execute([$postedSenderId, $targetWabaId, $meta_template_id, $tpl_name, $language, $category, $meta_data_updated, $edit_id, $postedSenderId]);
                                                 } else {
                                                     $stmtUpdate = $pdo->prepare("
                                                         UPDATE communication_templates 
