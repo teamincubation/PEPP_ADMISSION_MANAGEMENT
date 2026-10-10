@@ -100,6 +100,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     parent.appendChild(icon);
                 }
             }
+        });
+    });
+
     // 4. Click interaction tracking (Section D Analytics)
     document.querySelectorAll('[data-track-click]').forEach(function(el) {
         el.addEventListener('click', function() {
@@ -135,15 +138,18 @@ document.addEventListener('DOMContentLoaded', function() {
     // 5. Voluntary Region / Geolocation Analytics (Section D Privacy-First)
     try {
         var geoChoice = localStorage.getItem('pepp_geo_choice');
+        var isSingleUpdate = document.querySelector('.single-update') !== null || document.querySelector('.article-header') !== null;
+
         if (geoChoice === 'granted' && navigator.geolocation) {
             navigator.geolocation.getCurrentPosition(function(pos) {
                 sendLocationData('granted', pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
             }, function() {}, { timeout: 10000, maximumAge: 3600000 });
-        } else if (geoChoice === null && navigator.geolocation) {
-            // Show subtle non-intrusive prompt after 3 seconds of browsing
+        } else if ((geoChoice === null || geoChoice === '') && navigator.geolocation) {
+            // Show subtle non-intrusive prompt: 500ms on individual update page, 2000ms on other pages
+            var promptDelay = isSingleUpdate ? 500 : 2000;
             setTimeout(function() {
                 showLocationPrompt();
-            }, 3000);
+            }, promptDelay);
         }
     } catch (e) {}
 
@@ -175,36 +181,49 @@ document.addEventListener('DOMContentLoaded', function() {
         if (document.getElementById('peppLocationPrompt') || localStorage.getItem('pepp_geo_choice')) return;
         var banner = document.createElement('div');
         banner.id = 'peppLocationPrompt';
+        banner.className = 'pepp-location-prompt';
+        banner.setAttribute('role', 'region');
+        banner.setAttribute('aria-label', 'Location Permission Prompt');
         banner.style.cssText = 'position:fixed;bottom:20px;right:20px;max-width:340px;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,0.12);padding:14px 18px;z-index:9999;font-family:inherit;display:flex;flex-direction:column;gap:10px;animation:peppSlideUp 0.3s ease;';
         banner.innerHTML = '<div style="display:flex;gap:10px;align-items:flex-start;">' +
                            '<div style="font-size:1.2rem;line-height:1;">📍</div>' +
                            '<div style="font-size:0.83rem;color:#334155;line-height:1.45;">' +
-                           '<strong>Local Exam & Admission Alerts</strong><br>' +
+                           '<strong style="color:#0f172a;">Local Exam & Admission Alerts</strong><br>' +
                            'Share approximate location for district-specific updates?' +
                            '</div>' +
                            '</div>' +
                            '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:2px;">' +
-                           '<button type="button" id="locLaterBtn" style="background:transparent;border:none;color:#64748b;font-size:0.8rem;font-weight:600;padding:5px 10px;cursor:pointer;">Not now</button>' +
+                           '<button type="button" id="locLaterBtn" style="background:transparent;border:none;color:#64748b;font-size:0.8rem;font-weight:600;padding:5px 10px;cursor:pointer;border-radius:6px;">Not now</button>' +
                            '<button type="button" id="locAllowBtn" style="background:#0284c7;color:#ffffff;border:none;border-radius:6px;font-size:0.8rem;font-weight:600;padding:5px 14px;cursor:pointer;">Allow</button>' +
                            '</div>';
         document.body.appendChild(banner);
 
-        document.getElementById('locLaterBtn').addEventListener('click', function() {
-            localStorage.setItem('pepp_geo_choice', 'dismissed');
-            banner.remove();
-            sendLocationData('denied', null, null, null);
-        });
-
-        document.getElementById('locAllowBtn').addEventListener('click', function() {
-            banner.remove();
-            navigator.geolocation.getCurrentPosition(function(pos) {
-                localStorage.setItem('pepp_geo_choice', 'granted');
-                sendLocationData('granted', pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
-                showToast('Location enabled for regional alerts!');
-            }, function(err) {
+        var laterBtn = document.getElementById('locLaterBtn');
+        if (laterBtn) {
+            laterBtn.addEventListener('click', function() {
                 localStorage.setItem('pepp_geo_choice', 'denied');
+                banner.remove();
                 sendLocationData('denied', null, null, null);
-            }, { timeout: 8000, maximumAge: 3600000 });
-        });
+            });
+        }
+
+        var allowBtn = document.getElementById('locAllowBtn');
+        if (allowBtn) {
+            allowBtn.addEventListener('click', function() {
+                banner.remove();
+                if (navigator.geolocation) {
+                    navigator.geolocation.getCurrentPosition(function(pos) {
+                        localStorage.setItem('pepp_geo_choice', 'granted');
+                        sendLocationData('granted', pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
+                        showToast('Location enabled for regional alerts!');
+                    }, function(err) {
+                        localStorage.setItem('pepp_geo_choice', 'denied');
+                        sendLocationData('denied', null, null, null);
+                    }, { timeout: 10000, maximumAge: 3600000 });
+                } else {
+                    localStorage.setItem('pepp_geo_choice', 'denied');
+                }
+            });
+        }
     }
 });

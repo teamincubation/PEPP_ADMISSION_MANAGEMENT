@@ -82,7 +82,7 @@ $activeNav = '';
 require_once __DIR__ . '/includes/header.php';
 ?>
 
-<div class="container" style="padding-top:2rem;padding-bottom:3rem;">
+<div class="container single-update" style="padding-top:2rem;padding-bottom:3rem;">
     <!-- Breadcrumbs -->
     <nav class="breadcrumbs" aria-label="Breadcrumbs">
         <a href="/">Home</a>

@@ -371,6 +371,152 @@ if ($action === 'analytics_data') {
 }
 
 // ─────────────────────────────────────────────────────────────
+// AJAX AI FULL DESCRIPTION GENERATION (Requirement 4)
+// ─────────────────────────────────────────────────────────────
+if ($action === 'ai_generate_description') {
+    header('Content-Type: application/json; charset=utf-8');
+
+    // 1. Verify CSRF
+    $token = $_POST['csrf_token'] ?? $_SERVER['HTTP_X_CSRF_TOKEN'] ?? null;
+    if (!verify_csrf_token($token)) {
+        echo json_encode(['ok' => false, 'error' => 'Invalid or expired CSRF security token. Please refresh the page.']);
+        exit;
+    }
+
+    $title = trim($_POST['title'] ?? '');
+    $short_desc = trim($_POST['short_description'] ?? '');
+    $existing_banner = trim($_POST['existing_banner'] ?? '');
+
+    if ($title === '') {
+        echo json_encode(['ok' => false, 'error' => 'Update title is required to generate description.']);
+        exit;
+    }
+    if ($short_desc === '') {
+        echo json_encode(['ok' => false, 'error' => 'Short description is required to generate description.']);
+        exit;
+    }
+
+    // 2. Resolve Banner Image (either uploaded in $_FILES or existing attached banner)
+    $bannerBytes = null;
+    $bannerMime = null;
+
+    if (!empty($_FILES['banner']['name']) && $_FILES['banner']['error'] === UPLOAD_ERR_OK) {
+        $tmpFile = $_FILES['banner']['tmp_name'];
+        $fileSize = (int)$_FILES['banner']['size'];
+        if ($fileSize > 5 * 1024 * 1024) {
+            echo json_encode(['ok' => false, 'error' => 'Uploaded banner image exceeds maximum allowed size of 5 MB.']);
+            exit;
+        }
+
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        $detectedMime = finfo_file($finfo, $tmpFile);
+        finfo_close($finfo);
+
+        $allowedMimes = ['image/jpeg', 'image/png', 'image/webp'];
+        if (!in_array($detectedMime, $allowedMimes, true)) {
+            echo json_encode(['ok' => false, 'error' => 'Uploaded file is not a supported image format (JPG, PNG, WebP).']);
+            exit;
+        }
+
+        $bannerBytes = file_get_contents($tmpFile);
+        $bannerMime = $detectedMime;
+    } elseif ($existing_banner !== '') {
+        // Prevent path traversal
+        if (strpos($existing_banner, '..') !== false || strpos($existing_banner, "\0") !== false) {
+            echo json_encode(['ok' => false, 'error' => 'Invalid banner image path.']);
+            exit;
+        }
+
+        $safePath = false;
+        $resolvedFile = null;
+
+        $candidates = [
+            __DIR__ . '/' . ltrim($existing_banner, '/'),
+            dirname(__DIR__) . '/' . ltrim($existing_banner, '/'),
+            dirname(__DIR__) . '/admissions/' . ltrim($existing_banner, '/')
+        ];
+
+        foreach ($candidates as $cand) {
+            if (file_exists($cand) && is_file($cand)) {
+                $real = realpath($cand);
+                $rootReal = realpath(dirname(__DIR__));
+                if ($real && ($rootReal && strpos($real, $rootReal) === 0)) {
+                    $resolvedFile = $real;
+                    $safePath = true;
+                    break;
+                }
+            }
+        }
+
+        if (!$safePath || !$resolvedFile) {
+            echo json_encode(['ok' => false, 'error' => 'Attached banner image file could not be found on server. Please re-upload the banner.']);
+            exit;
+        }
+
+        $fileSize = filesize($resolvedFile);
+        if ($fileSize > 5 * 1024 * 1024) {
+            echo json_encode(['ok' => false, 'error' => 'Banner image file exceeds maximum allowed size of 5 MB.']);
+            exit;
+        }
+
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        $detectedMime = finfo_file($finfo, $resolvedFile);
+        finfo_close($finfo);
+
+        $allowedMimes = ['image/jpeg', 'image/png', 'image/webp'];
+        if (!in_array($detectedMime, $allowedMimes, true)) {
+            echo json_encode(['ok' => false, 'error' => 'Existing banner is not a valid image format.']);
+            exit;
+        }
+
+        $bannerBytes = file_get_contents($resolvedFile);
+        $bannerMime = $detectedMime;
+    } else {
+        echo json_encode(['ok' => false, 'error' => 'A banner image is required. Please upload or attach a banner image before generating with AI.']);
+        exit;
+    }
+
+    if (empty($bannerBytes)) {
+        echo json_encode(['ok' => false, 'error' => 'Failed to read banner image data.']);
+        exit;
+    }
+
+    // 3. Invoke PeppUpdatesAiService
+    require_once __DIR__ . '/includes/ai/PeppUpdatesAiService.php';
+    try {
+        $aiService = new PeppUpdatesAiService($pdo);
+        if (!$aiService->isConfigured()) {
+            echo json_encode([
+                'ok' => false,
+                'error' => 'Gemini AI API key is not configured. Please set the GEMINI_API_KEY environment variable or configure gemini_api_key in admin settings.'
+            ]);
+            exit;
+        }
+
+        $res = $aiService->generateDescription($title, $short_desc, $bannerMime, $bannerBytes);
+        if ($res['success']) {
+            echo json_encode([
+                'ok' => true,
+                'full_description' => $res['full_description'],
+                'model' => $res['model'] ?? ''
+            ]);
+        } else {
+            echo json_encode([
+                'ok' => false,
+                'error' => $res['error']
+            ]);
+        }
+    } catch (Throwable $e) {
+        error_log('AI description error: ' . $e->getMessage());
+        echo json_encode([
+            'ok' => false,
+            'error' => 'AI generation failed: ' . htmlspecialchars($e->getMessage())
+        ]);
+    }
+    exit;
+}
+
+// ─────────────────────────────────────────────────────────────
 // LOAD DATA FOR EDIT FORM
 // ─────────────────────────────────────────────────────────────
 $edit_post = null;
@@ -486,9 +632,150 @@ if ($action === 'create' || $action === 'edit') {
     <link href="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.snow.css" rel="stylesheet" />
     <script src="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.js"></script>
     <style>
-        .quill-editor-container { min-height: 280px; background: #fff; border-radius: 0 0 9px 9px; font-size: 0.9rem; font-family: inherit; }
-        .ql-toolbar.ql-snow { border-radius: 9px 9px 0 0; background: var(--card); border-color: var(--border); }
-        .ql-container.ql-snow { border-color: var(--border); border-bottom-left-radius: 9px; border-bottom-right-radius: 9px; }
+        .quill-editor-container { min-height: 320px; background: #fff; border-radius: 0 0 9px 9px; font-size: 0.95rem; font-family: inherit; line-height: 1.6; }
+        .ql-toolbar.ql-snow { border-radius: 9px 9px 0 0; background: var(--card, #ffffff); border-color: var(--border, #cbd5e1); display: flex; flex-wrap: wrap; gap: 4px; padding: 10px; z-index: 10; position: relative; }
+        .ql-container.ql-snow { border-color: var(--border, #cbd5e1); border-bottom-left-radius: 9px; border-bottom-right-radius: 9px; font-size: 0.95rem; }
+
+        /* Ensure pickers (dropdowns) have high contrast, visible labels, and top z-index */
+        .ql-snow .ql-picker { position: relative; }
+        .ql-snow .ql-picker-label {
+            display: inline-flex;
+            align-items: center;
+            color: var(--foreground, #1e293b);
+            border: 1px solid transparent;
+            border-radius: 6px;
+            padding: 3px 6px;
+            background: transparent;
+            cursor: pointer;
+            font-size: 0.85rem;
+        }
+        .ql-snow .ql-picker-label:hover,
+        .ql-snow .ql-picker.ql-expanded .ql-picker-label {
+            background: var(--surface, #f1f5f9);
+            border-color: var(--border, #cbd5e1);
+            color: var(--primary, #0f172a);
+        }
+        .ql-snow .ql-picker-options {
+            background: #ffffff !important;
+            border: 1px solid var(--border, #cbd5e1) !important;
+            border-radius: 8px !important;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.18), 0 8px 10px -6px rgba(0, 0, 0, 0.12) !important;
+            padding: 6px !important;
+            z-index: 9999 !important;
+            position: absolute !important;
+            min-width: 140px;
+        }
+        .ql-snow .ql-picker-item {
+            color: #334155 !important;
+            font-size: 0.86rem !important;
+            padding: 6px 10px !important;
+            border-radius: 4px !important;
+            cursor: pointer !important;
+            display: block !important;
+            line-height: 1.4 !important;
+        }
+        .ql-snow .ql-picker-item:hover,
+        .ql-snow .ql-picker-item.ql-selected {
+            background-color: #f1f5f9 !important;
+            color: #2563eb !important;
+            font-weight: 600 !important;
+        }
+
+        /* Explicit text labels for pickers so options are never blank */
+        .ql-snow .ql-picker.ql-header .ql-picker-label::before,
+        .ql-snow .ql-picker.ql-header .ql-picker-item::before {
+            content: "Normal Text" !important;
+        }
+        .ql-snow .ql-picker.ql-header .ql-picker-label[data-value="1"]::before,
+        .ql-snow .ql-picker.ql-header .ql-picker-item[data-value="1"]::before {
+            content: "Heading 1" !important;
+            font-size: 1.25rem !important;
+            font-weight: 700 !important;
+        }
+        .ql-snow .ql-picker.ql-header .ql-picker-label[data-value="2"]::before,
+        .ql-snow .ql-picker.ql-header .ql-picker-item[data-value="2"]::before {
+            content: "Heading 2" !important;
+            font-size: 1.1rem !important;
+            font-weight: 700 !important;
+        }
+        .ql-snow .ql-picker.ql-header .ql-picker-label[data-value="3"]::before,
+        .ql-snow .ql-picker.ql-header .ql-picker-item[data-value="3"]::before {
+            content: "Heading 3" !important;
+            font-size: 0.95rem !important;
+            font-weight: 600 !important;
+        }
+
+        /* Font size labels */
+        .ql-snow .ql-picker.ql-size .ql-picker-label::before,
+        .ql-snow .ql-picker.ql-size .ql-picker-item::before {
+            content: "Normal Size" !important;
+        }
+        .ql-snow .ql-picker.ql-size .ql-picker-label[data-value="small"]::before,
+        .ql-snow .ql-picker.ql-size .ql-picker-item[data-value="small"]::before {
+            content: "Small" !important;
+        }
+        .ql-snow .ql-picker.ql-size .ql-picker-label[data-value="large"]::before,
+        .ql-snow .ql-picker.ql-size .ql-picker-item[data-value="large"]::before {
+            content: "Large" !important;
+        }
+        .ql-snow .ql-picker.ql-size .ql-picker-label[data-value="huge"]::before,
+        .ql-snow .ql-picker.ql-size .ql-picker-item[data-value="huge"]::before {
+            content: "Huge" !important;
+        }
+
+        /* Font family labels */
+        .ql-snow .ql-picker.ql-font .ql-picker-label::before,
+        .ql-snow .ql-picker.ql-font .ql-picker-item::before {
+            content: "Sans Serif" !important;
+            font-family: sans-serif;
+        }
+        .ql-snow .ql-picker.ql-font .ql-picker-label[data-value="serif"]::before,
+        .ql-snow .ql-picker.ql-font .ql-picker-item[data-value="serif"]::before {
+            content: "Serif" !important;
+            font-family: Georgia, serif;
+        }
+        .ql-snow .ql-picker.ql-font .ql-picker-label[data-value="monospace"]::before,
+        .ql-snow .ql-picker.ql-font .ql-picker-item[data-value="monospace"]::before {
+            content: "Monospace" !important;
+            font-family: monospace;
+        }
+
+        /* Color Picker styling */
+        .ql-snow .ql-color-picker .ql-picker-options {
+            width: 180px !important;
+            padding: 8px !important;
+        }
+        .ql-snow .ql-color-picker .ql-picker-item {
+            border: 1px solid rgba(0,0,0,0.18) !important;
+            border-radius: 4px !important;
+            width: 20px !important;
+            height: 20px !important;
+            margin: 2px !important;
+            padding: 0 !important;
+            transition: transform .12s ease;
+        }
+        .ql-snow .ql-color-picker .ql-picker-item:hover {
+            transform: scale(1.22);
+            border-color: #000 !important;
+            z-index: 2;
+        }
+
+        /* Toolbar button states */
+        .ql-snow .ql-toolbar button {
+            border-radius: 6px;
+            padding: 4px;
+            transition: all .15s ease;
+        }
+        .ql-snow .ql-toolbar button:hover,
+        .ql-snow .ql-toolbar button:focus {
+            background: var(--surface, #f1f5f9);
+            color: var(--primary, #0f172a);
+        }
+        .ql-snow .ql-toolbar button.ql-active {
+            background: var(--accent-soft, #ede9fe);
+            color: var(--accent, #7c3aed);
+        }
+
         .category-chip-label { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 8px; border: 1.5px solid var(--border); background: var(--surface); cursor: pointer; user-select: none; font-size: 0.84rem; font-weight: 500; transition: all .15s ease; }
         .category-chip-label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-dark); font-weight: 600; }
         .keyword-tag-label { display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); cursor: pointer; user-select: none; font-size: 0.78rem; transition: all .15s ease; }
@@ -538,7 +825,7 @@ include 'includes/admin_nav.php';
         <?php echo csrf_field(); ?>
         <input type="hidden" name="post_action_submit" value="1">
         <input type="hidden" name="id" value="<?php echo $edit_post['id'] ?? ''; ?>">
-        <input type="hidden" name="existing_banner" value="<?php echo htmlspecialchars($edit_post['banner_image'] ?? ''); ?>">
+        <input type="hidden" name="existing_banner" id="existingBannerInput" value="<?php echo htmlspecialchars($edit_post['banner_image'] ?? ''); ?>">
         <input type="hidden" name="full_description" id="full_description_input">
         <input type="hidden" name="submit_type" id="submit_type_input" value="draft">
 
@@ -580,7 +867,7 @@ include 'includes/admin_nav.php';
                     <div class="panel-body">
                         <div class="field">
                             <label>Short Description (Used in cards, listings &amp; WhatsApp broadcasts)</label>
-                            <textarea name="short_description" rows="3" maxlength="500" 
+                            <textarea name="short_description" id="postShortDesc" rows="3" maxlength="500"
                                       placeholder="Brief 1-2 sentence overview of this notification or career alert..."><?php echo htmlspecialchars($edit_post['short_description'] ?? ''); ?></textarea>
                             <div class="help">Plain text summary. Maximum 500 characters.</div>
                         </div>
@@ -589,16 +876,28 @@ include 'includes/admin_nav.php';
 
                 <!-- Full Description with Quill Rich Text Editor -->
                 <div class="panel">
-                    <div class="panel-head">
-                        <div class="head-icon"><i class="fas fa-file-lines"></i></div>
-                        <h2>Full Details (Rich Text)</h2>
+                    <div class="panel-head" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <div class="head-icon"><i class="fas fa-file-lines"></i></div>
+                            <h2>Full Details (Rich Text)</h2>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                            <span class="ai-warning-badge" id="aiWarningBadge" style="font-size: 0.72rem; color: #b45309; background: #fef3c7; border: 1px solid #fde68a; padding: 5px 10px; border-radius: 6px; display: inline-flex; align-items: center; gap: 6px; font-weight: 500;">
+                                <i class="fas fa-triangle-exclamation" style="color: #d97706;"></i>
+                                <span>AI can make mistakes. Check important details before saving or publishing.</span>
+                            </span>
+                            <button type="button" id="btnAiGenerate" class="btn btn-sm btn-outline" style="display: inline-flex; align-items: center; gap: 6px; font-weight: 600; border-color: #7c3aed; color: #7c3aed; padding: 6px 12px; transition: all .15s ease;" disabled onclick="generateAiDescription()" title="Fill in Title, Short Description, and Banner image to enable AI generation">
+                                <i class="fas fa-wand-magic-sparkles"></i>
+                                <span id="btnAiGenerateText">Generate with AI</span>
+                            </button>
+                        </div>
                     </div>
                     <div class="panel-body">
                         <div class="field">
                             <label>Full Content (Career / Exam / Notification Details)</label>
                             <div id="quillEditor" class="quill-editor-container"><?php echo $edit_post['full_description'] ?? ''; ?></div>
                             <div class="help" style="margin-top: 8px;">
-                                Supported: Headings, Bold, Italic, Lists, Tables, Links, and Text Alignment. Content is strictly sanitized on server.
+                                Supported: Font Family, Font Size, Headings, Bold, Italic, Underline, Strike, Text Color, Lists, Quote, Link, and Text Alignment. Content is strictly sanitized on server.
                             </div>
                         </div>
                     </div>
@@ -692,7 +991,7 @@ include 'includes/admin_nav.php';
 
                         <div class="field">
                             <label><?php echo !empty($edit_post['banner_image']) ? 'Replace Banner Image' : 'Upload Banner Image'; ?></label>
-                            <input type="file" name="banner" accept="image/jpeg,image/png,image/webp">
+                            <input type="file" name="banner" id="bannerFileInput" accept="image/jpeg,image/png,image/webp">
                             <div class="help">JPG, PNG, or WebP. Maximum size: 5 MB. Stored in <code>/uploads/updates/banners/</code>.</div>
                         </div>
                     </div>
@@ -764,15 +1063,150 @@ include 'includes/admin_nav.php';
         placeholder: 'Write the complete career / admission / exam update content...',
         modules: {
             toolbar: [
+                [{ 'font': [] }],
+                [{ 'size': ['small', false, 'large', 'huge'] }],
                 [{ 'header': [1, 2, 3, false] }],
                 ['bold', 'italic', 'underline', 'strike'],
-                [{ 'list': 'ordered'}, { 'list': 'bullet' }],
+                [{ 'color': [
+                    '#000000', '#1e293b', '#475569', '#64748b',
+                    '#2563eb', '#0284c7', '#0d9488', '#059669',
+                    '#16a34a', '#ca8a04', '#d97706', '#ea580c',
+                    '#dc2626', '#e11d48', '#7c3aed', '#9333ea',
+                    '#ffffff'
+                ] }],
                 [{ 'align': [] }],
+                [{ 'list': 'ordered'}, { 'list': 'bullet' }],
                 ['blockquote', 'link'],
                 ['clean']
             ]
         }
     });
+
+    // Dynamic Enabling for 'Generate with AI' Button
+    function updateAiButtonState() {
+        var btn = document.getElementById('btnAiGenerate');
+        if (!btn) return;
+
+        var titleVal = (document.getElementById('postTitle') ? document.getElementById('postTitle').value : '').trim();
+        var shortDescVal = (document.getElementById('postShortDesc') ? document.getElementById('postShortDesc').value : '').trim();
+
+        var bannerInput = document.getElementById('bannerFileInput');
+        var hasUploadedFile = bannerInput && bannerInput.files && bannerInput.files.length > 0;
+
+        var existingBannerInput = document.getElementById('existingBannerInput');
+        var hasExistingBanner = existingBannerInput && existingBannerInput.value.trim().length > 0;
+
+        var isReady = (titleVal.length > 0) && (shortDescVal.length > 0) && (hasUploadedFile || hasExistingBanner);
+
+        btn.disabled = !isReady;
+        if (isReady) {
+            btn.title = "Generate full description using AI analysis of title, short description, and banner image";
+            btn.style.opacity = '1';
+            btn.style.cursor = 'pointer';
+        } else {
+            var missing = [];
+            if (!titleVal.length) missing.push("Title");
+            if (!shortDescVal.length) missing.push("Short Description");
+            if (!hasUploadedFile && !hasExistingBanner) missing.push("Banner Image");
+            btn.title = "To enable AI generation, please provide: " + missing.join(", ");
+            btn.style.opacity = '0.55';
+            btn.style.cursor = 'not-allowed';
+        }
+    }
+
+    // Attach listeners for dynamic enabling
+    var postTitleEl = document.getElementById('postTitle');
+    if (postTitleEl) postTitleEl.addEventListener('input', updateAiButtonState);
+
+    var postShortDescEl = document.getElementById('postShortDesc');
+    if (postShortDescEl) postShortDescEl.addEventListener('input', updateAiButtonState);
+
+    var bannerFileEl = document.getElementById('bannerFileInput');
+    if (bannerFileEl) bannerFileEl.addEventListener('change', updateAiButtonState);
+
+    // Initial check on page load
+    updateAiButtonState();
+
+    // AI Generation Execution Handler
+    function generateAiDescription() {
+        var btn = document.getElementById('btnAiGenerate');
+        if (!btn || btn.disabled) return;
+
+        var title = (document.getElementById('postTitle') ? document.getElementById('postTitle').value : '').trim();
+        var shortDesc = (document.getElementById('postShortDesc') ? document.getElementById('postShortDesc').value : '').trim();
+        var bannerInput = document.getElementById('bannerFileInput');
+        var existingBanner = (document.getElementById('existingBannerInput') ? document.getElementById('existingBannerInput').value : '').trim();
+
+        if (!title || !shortDesc || (!existingBanner && (!bannerInput || !bannerInput.files.length))) {
+            alert('Please provide Title, Short Description, and upload or attach a Banner Image first.');
+            updateAiButtonState();
+            return;
+        }
+
+        // Check if editor already has existing content
+        var existingText = quill.getText().trim();
+        var insertMode = 'replace';
+        if (existingText.length > 0) {
+            var choice = confirm(
+                "The Full Details editor already has content.\n\n" +
+                "Click OK to REPLACE the existing content with the AI-generated description.\n" +
+                "Click CANCEL to APPEND the AI-generated description to your existing content."
+            );
+            insertMode = choice ? 'replace' : 'append';
+        }
+
+        // Set loading state
+        btn.disabled = true;
+        var originalBtnHtml = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> <span>Analyzing &amp; Generating...</span>';
+
+        var formData = new FormData();
+        formData.append('title', title);
+        formData.append('short_description', shortDesc);
+        formData.append('csrf_token', document.querySelector('input[name="csrf_token"]').value);
+        if (existingBanner) {
+            formData.append('existing_banner', existingBanner);
+        }
+        if (bannerInput && bannerInput.files && bannerInput.files.length > 0) {
+            formData.append('banner', bannerInput.files[0]);
+        }
+
+        fetch('pepp-updates-posts.php?action=ai_generate_description', {
+            method: 'POST',
+            body: formData
+        })
+        .then(function(res) {
+            return res.json();
+        })
+        .then(function(data) {
+            btn.innerHTML = originalBtnHtml;
+            updateAiButtonState();
+
+            if (data.ok && data.full_description) {
+                if (insertMode === 'replace') {
+                    quill.clipboard.dangerouslyPasteHTML(0, data.full_description);
+                } else {
+                    var length = quill.getLength();
+                    quill.clipboard.dangerouslyPasteHTML(length, '<br>' + data.full_description);
+                }
+
+                // Scroll editor into view
+                var editorEl = document.getElementById('quillEditor');
+                if (editorEl) {
+                    editorEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+
+                alert('AI Full Description generated successfully!\n\nPlease review and verify all details before saving or publishing.');
+            } else {
+                alert('AI Generation Error: ' + (data.error || 'Failed to generate description.'));
+            }
+        })
+        .catch(function(err) {
+            btn.innerHTML = originalBtnHtml;
+            updateAiButtonState();
+            alert('AI Generation Network Error: ' + (err.message || 'Unable to reach the server.'));
+        });
+    }
 
     function submitFormWithAction(type) {
         document.getElementById('submit_type_input').value = type;

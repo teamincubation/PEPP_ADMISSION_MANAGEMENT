@@ -145,10 +145,6 @@ require_once __DIR__ . '/includes/header.php';
                                 <?php elseif ($isExpired): ?>
                                     <span class="badge-pill expired">EXPIRED</span>
                                 <?php endif; ?>
-
-                                <?php if ($primaryCat): ?>
-                                    <span class="badge-pill category"><?php echo htmlspecialchars($primaryCat); ?></span>
-                                <?php endif; ?>
                             </div>
                         </div>
 

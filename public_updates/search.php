@@ -104,7 +104,6 @@ require_once __DIR__ . '/includes/header.php';
                             <div class="card-badges">
                                 <?php if ($isNew): ?><span class="badge-pill new">NEW</span><?php endif; ?>
                                 <?php if ($isExpired): ?><span class="badge-pill expired">EXPIRED</span><?php endif; ?>
-                                <?php if ($primaryCat): ?><span class="badge-pill category"><?php echo htmlspecialchars($primaryCat); ?></span><?php endif; ?>
                             </div>
                         </div>
                         <div class="card-body">

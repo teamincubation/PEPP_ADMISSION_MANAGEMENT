@@ -251,9 +251,33 @@ function pepp_public_sanitize_html(?string $html): string {
                 $attrsToRemove = [];
                 foreach ($node->attributes as $attr) {
                     $attrName = strtolower($attr->name);
-                    // Disallow all on* handlers and raw style
-                    if (str_starts_with($attrName, 'on') || $attrName === 'style') {
+                    // Disallow all on* handlers
+                    if (str_starts_with($attrName, 'on')) {
                         $attrsToRemove[] = $attrName;
+                        continue;
+                    }
+
+                    // Handle inline styles: allow only safe color and background-color declarations
+                    if ($attrName === 'style') {
+                        $styleVal = trim($attr->value);
+                        if (preg_match('/url|expression|javascript|behavior|-moz-binding|@import/i', $styleVal)) {
+                            $attrsToRemove[] = $attrName;
+                            continue;
+                        }
+                        $declarations = explode(';', $styleVal);
+                        $safeDecls = [];
+                        foreach ($declarations as $decl) {
+                            $decl = trim($decl);
+                            if ($decl === '') continue;
+                            if (preg_match('/^(color|background-color)\s*:\s*(#[0-9a-fA-F]{3,8}|rgb\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)|rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*[\d.]+\s*\)|[a-zA-Z]+)$/i', $decl, $m)) {
+                                $safeDecls[] = strtolower($m[1]) . ': ' . $m[2];
+                            }
+                        }
+                        if (!empty($safeDecls)) {
+                            $attr->value = implode('; ', $safeDecls);
+                        } else {
+                            $attrsToRemove[] = $attrName;
+                        }
                         continue;
                     }
                     if ($tag === 'a') {
