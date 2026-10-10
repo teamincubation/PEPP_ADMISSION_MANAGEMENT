@@ -17,10 +17,14 @@ $pageSeo = $pageSeo ?? [];
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     
-    <!-- Google Fonts: Outfit -->
+    <!-- Favicon & Touch Icon (Aligned with PEPP Admissions) -->
+    <link rel="icon" type="image/png" href="/assets/images/logo.png">
+    <link rel="apple-touch-icon" href="/assets/images/logo.png">
+
+    <!-- Google Fonts: Google Sans Flex -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     
     <!-- Design System CSS -->
     <link rel="stylesheet" href="/assets/css/style.css">
@@ -34,7 +38,7 @@ $pageSeo = $pageSeo ?? [];
     <header class="site-header">
         <div class="container header-inner">
             <a href="/" class="brand-link" aria-label="PEPP Updates Homepage">
-                <div class="brand-logo-mark" aria-hidden="true">P</div>
+                <img src="/assets/images/logo.png" alt="PEPP Learning Logo" class="brand-logo-img" width="40" height="40">
                 <div class="brand-text">
                     <span class="brand-title">PEPP <span style="color:var(--primary);">Updates</span></span>
                     <span class="brand-sub">Career & Exam Alerts</span>

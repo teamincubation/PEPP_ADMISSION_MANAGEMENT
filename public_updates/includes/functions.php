@@ -109,7 +109,18 @@ function pepp_public_resolve_banner(?string $bannerPath): string {
     if (empty($bannerPath)) {
         return '';
     }
-    // If full HTTP URL
+
+    $bannerPath = trim($bannerPath);
+    if ($bannerPath === '') {
+        return '';
+    }
+
+    // Protocol-relative URL
+    if (strpos($bannerPath, '//') === 0) {
+        return 'https:' . $bannerPath;
+    }
+
+    // Full HTTP/HTTPS URL
     if (strpos($bannerPath, 'http://') === 0 || strpos($bannerPath, 'https://') === 0) {
         return $bannerPath;
     }
@@ -117,14 +128,18 @@ function pepp_public_resolve_banner(?string $bannerPath): string {
     // Relative upload path, e.g. uploads/updates/banners/banner_xyz.jpg
     $cleanPath = ltrim($bannerPath, '/');
     
-    // On production Hostinger, uploads/ lives at the main domain root https://pepplearning.in/uploads/...
-    // If running under updates.pepplearning.in, we reference the canonical domain or relative path
-    $host = $_SERVER['HTTP_HOST'] ?? 'updates.pepplearning.in';
-    if (str_contains($host, 'localhost') || str_contains($host, '127.0.0.1')) {
-        return '/' . $cleanPath;
+    // In PEPP ERP on production Hostinger, all uploaded assets reside under
+    // /public_html/admissions/uploads/updates/banners/...
+    // Canonical web URL is https://pepplearning.in/admissions/uploads/...
+    if (strpos($cleanPath, 'admissions/') === 0) {
+        return 'https://pepplearning.in/' . $cleanPath;
     }
-    
-    return 'https://pepplearning.in/' . $cleanPath;
+
+    if (strpos($cleanPath, 'uploads/') === 0) {
+        return 'https://pepplearning.in/admissions/' . $cleanPath;
+    }
+
+    return 'https://pepplearning.in/admissions/uploads/' . $cleanPath;
 }
 
 /**

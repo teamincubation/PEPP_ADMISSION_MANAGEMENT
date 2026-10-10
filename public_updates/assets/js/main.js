@@ -87,16 +87,16 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // 3. Fallback for broken banner images
-    document.querySelectorAll('.post-card-banner img, .update-banner-wrapper img').forEach(function(img) {
+    document.querySelectorAll('.card-media img, .article-banner-wrap img, .post-card-banner img, .update-banner-wrapper img').forEach(function(img) {
         img.addEventListener('error', function() {
             this.style.display = 'none';
-            var parent = this.closest('.post-card-banner') || this.closest('.update-banner-wrapper');
+            var parent = this.closest('.card-media') || this.closest('.article-banner-wrap') || this.closest('.post-card-banner') || this.closest('.update-banner-wrapper');
             if (parent) {
                 parent.classList.add('banner-fallback');
-                if (!parent.querySelector('.banner-placeholder-icon')) {
+                if (!parent.querySelector('.card-media-placeholder') && !parent.querySelector('.banner-placeholder-icon')) {
                     var icon = document.createElement('div');
-                    icon.className = 'banner-placeholder-icon';
-                    icon.innerHTML = '<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>';
+                    icon.className = 'card-media-placeholder';
+                    icon.innerHTML = '<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg><span>PEPP Updates</span>';
                     parent.appendChild(icon);
                 }
             }
