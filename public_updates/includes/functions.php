@@ -451,12 +451,6 @@ function pepp_public_log_visit(PDO $pdo, ?int $postId = null): void {
             ");
             $stmtIns->execute([$postId, $ipHash, $ua ?: null, $ref ?: null, $today]);
         }
-
-        // Increment post view count atomically if this is a post view
-        if ($postId !== null) {
-            $stmtView = $pdo->prepare("UPDATE updates_posts SET view_count = view_count + 1 WHERE id = ?");
-            $stmtView->execute([$postId]);
-        }
     } catch (Throwable $e) {
         error_log('pepp_public_log_visit error: ' . $e->getMessage());
     }
@@ -525,7 +519,7 @@ function pepp_public_get_posts(PDO $pdo, array $options = []): array {
 
     $sql = "
         SELECT p.*,
-               COALESCE(p.view_count, (SELECT COUNT(*) FROM updates_visits v WHERE v.post_id = p.id), 0) AS view_count,
+               (SELECT COUNT(*) FROM updates_visits v WHERE v.post_id = p.id) AS view_count,
                {$catConcatSql} AS category_names
         FROM updates_posts p
         LEFT JOIN updates_post_categories upc ON upc.post_id = p.id
@@ -578,7 +572,7 @@ function pepp_public_get_post_by_slug(PDO $pdo, string $slug): ?array {
 
     $sql = "
         SELECT p.*,
-               COALESCE(p.view_count, (SELECT COUNT(*) FROM updates_visits v WHERE v.post_id = p.id), 0) AS view_count
+               (SELECT COUNT(*) FROM updates_visits v WHERE v.post_id = p.id) AS view_count
         FROM updates_posts p
         WHERE p.slug = ?
           AND p.status = 'published'
@@ -688,7 +682,7 @@ function pepp_public_get_related_posts(PDO $pdo, int $currentPostId, array $cate
 
     $sql = "
         SELECT DISTINCT p.id, p.title, p.slug, p.short_description, p.banner_image, p.publish_at, p.expires_at, p.status,
-               COALESCE(p.view_count, (SELECT COUNT(*) FROM updates_visits v WHERE v.post_id = p.id), 0) AS view_count
+               (SELECT COUNT(*) FROM updates_visits v WHERE v.post_id = p.id) AS view_count
         FROM updates_posts p
         JOIN updates_post_categories upc ON upc.post_id = p.id
         WHERE upc.category_id IN ({$inPlaceholders})

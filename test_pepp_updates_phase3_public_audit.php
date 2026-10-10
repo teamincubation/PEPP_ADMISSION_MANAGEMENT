@@ -128,7 +128,6 @@ $pdo->exec("
         expires_at TEXT,
         created_by TEXT,
         updated_by TEXT,
-        view_count INTEGER NOT NULL DEFAULT 0,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
@@ -484,9 +483,9 @@ assert_test('U1: Visit logged in updates_visits', $visitRow !== false);
 assert_test('U2: IP address is stored as SHA-256 hash (64 hex chars)', strlen($visitRow['ip_hash']) === 64);
 assert_test('U3: Raw IP address is NOT stored in updates_visits', !str_contains($visitRow['ip_hash'], '203.0.113.195'));
 
-// Post view_count increment
-$postAfterVisit = $pdo->query("SELECT view_count FROM updates_posts WHERE id = 1")->fetchColumn();
-assert_test('U4: Post view_count incremented', (int)$postAfterVisit === 1);
+// Post view_count calculated from updates_visits (production schema has no updates_posts.view_count)
+$postAfterVisit = pepp_public_get_post_by_slug($pdo, 'cuet-pg-2027-registration');
+assert_test('U4: Post view_count incremented', (int)($postAfterVisit['view_count'] ?? 0) === 1);
 
 // Visit deduplication on same day
 pepp_public_log_visit($pdo, 1);
