@@ -38,6 +38,58 @@ function pepp_updates_tables_exist(PDO $pdo): bool {
 }
 
 /**
+ * Checks if a specific PEPP Updates table exists.
+ */
+function pepp_updates_table_exists(PDO $pdo, string $tableName): bool {
+    static $cache = [];
+    if (isset($cache[$tableName])) return $cache[$tableName];
+    try {
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        if ($driver === 'sqlite') {
+            $stmt = $pdo->prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?");
+            $stmt->execute([$tableName]);
+            return $cache[$tableName] = (bool)$stmt->fetchColumn();
+        } else {
+            $stmt = $pdo->prepare("SHOW TABLES LIKE ?");
+            $stmt->execute([$tableName]);
+            return $cache[$tableName] = (bool)$stmt->fetchColumn();
+        }
+    } catch (Throwable $e) {
+        return $cache[$tableName] = false;
+    }
+}
+
+if (!function_exists('pepp_updates_column_exists')) {
+    /**
+     * Checks if a specific column exists in a PEPP Updates table.
+     */
+    function pepp_updates_column_exists(PDO $pdo, string $tableName, string $columnName): bool {
+        static $cache = [];
+        $k = "{$tableName}.{$columnName}";
+        if (isset($cache[$k])) return $cache[$k];
+        try {
+            $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            if ($driver === 'sqlite') {
+                $stmt = $pdo->query("PRAGMA table_info({$tableName})");
+                $cols = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                foreach ($cols as $col) {
+                    if (strcasecmp($col['name'] ?? '', $columnName) === 0) {
+                        return $cache[$k] = true;
+                    }
+                }
+                return $cache[$k] = false;
+            } else {
+                $stmt = $pdo->prepare("SHOW COLUMNS FROM `{$tableName}` LIKE ?");
+                $stmt->execute([$columnName]);
+                return $cache[$k] = (bool)$stmt->fetch();
+            }
+        } catch (Throwable $e) {
+            return $cache[$k] = false;
+        }
+    }
+}
+
+/**
  * Returns PEPP Updates 9 Dashboard statistics using lightweight indexed queries.
  */
 function pepp_updates_stats(PDO $pdo): array {

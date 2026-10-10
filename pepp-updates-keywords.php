@@ -103,8 +103,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['keyword_submit'])) {
 // ─────────────────────────────────────────────────────────────
 // DELETE KEYWORD
 // ─────────────────────────────────────────────────────────────
-if ($action === 'delete' && isset($_GET['id']) && isset($_GET['csrf_token'])) {
-    if (!csrf_verify()) {
+if ($action === 'delete' && isset($_GET['id'])) {
+    $token = $_POST['csrf_token'] ?? $_GET['csrf_token'] ?? $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+    if (!verify_csrf_token($token)) {
         $flash_error = 'Invalid security token.';
     } else {
         $del_id = (int)$_GET['id'];

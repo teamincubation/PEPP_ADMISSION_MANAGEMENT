@@ -141,13 +141,13 @@ include 'includes/admin_nav.php';
     </div>
 
     <!-- 6. Total Views -->
-    <div class="stat-card">
+    <div class="stat-card" style="cursor: pointer;" onclick="openViewAnalytics(0, 'All Updates Overview')" title="Click to view detailed visitor analytics">
         <div class="stat-top">
             <span class="stat-label">Total Views</span>
             <div class="stat-icon teal"><i class="fas fa-eye"></i></div>
         </div>
         <div class="stat-value"><?php echo number_format($stats['total_views']); ?></div>
-        <div class="stat-hint">Hashed privacy analytics</div>
+        <div class="stat-hint"><span style="color: var(--accent); font-weight: 500;">Detailed analytics &rarr;</span></div>
     </div>
 
     <!-- 7. Active WhatsApp Subscribers -->
@@ -356,6 +356,210 @@ include 'includes/admin_nav.php';
     </div>
 
 </div>
+
+<!-- ─────────────────────────────────────────────────────────────
+     VISITOR & VIEW ANALYTICS MODAL (Section D)
+     ───────────────────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="analyticsModal" style="display: none; position: fixed; inset: 0; background: rgba(15,23,42,0.6); z-index: 999; align-items: center; justify-content: center; padding: 20px;">
+    <div class="modal-box" style="background: var(--surface); border-radius: 14px; max-width: 900px; width: 100%; max-height: 88vh; overflow-y: auto; box-shadow: 0 20px 45px rgba(0,0,0,0.2); border: 1px solid var(--border);">
+        <div class="modal-head" style="display: flex; align-items: center; justify-content: space-between; padding: 16px 22px; border-bottom: 1px solid var(--border);">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <div class="head-icon" style="color: var(--accent);"><i class="fas fa-chart-line"></i></div>
+                <div>
+                    <h3 style="margin: 0; font-size: 1.05rem; font-weight: 700;">Visitor & View Analytics</h3>
+                    <div id="analyticsModalSubtitle" style="font-size: 0.8rem; color: var(--secondary);">Loading analytics...</div>
+                </div>
+            </div>
+            <button type="button" class="btn btn-sm btn-outline" onclick="closeViewAnalytics()" style="font-size: 1rem; padding: 4px 10px;">&times;</button>
+        </div>
+        <div class="modal-body" style="padding: 22px;">
+            <!-- Tabs: Visits vs Clicks -->
+            <div style="display: flex; gap: 10px; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 10px;">
+                <button type="button" id="tabVisitsBtn" class="btn btn-sm btn-primary" onclick="switchAnalyticsTab('visits')">
+                    <i class="fas fa-eye"></i> Page Visits (<span id="analyticsVisitsCount">0</span>)
+                </button>
+                <button type="button" id="tabClicksBtn" class="btn btn-sm btn-outline" onclick="switchAnalyticsTab('clicks')">
+                    <i class="fas fa-hand-pointer"></i> Tracked Button Clicks (<span id="analyticsClicksCount">0</span>)
+                </button>
+            </div>
+
+            <!-- Visits Tab Content -->
+            <div id="analyticsVisitsTab">
+                <div id="analyticsLoading" style="text-align: center; padding: 30px; color: var(--secondary);">
+                    <i class="fas fa-circle-notch fa-spin"></i> Loading visitor activity...
+                </div>
+                <div id="analyticsVisitsEmpty" style="display: none; text-align: center; padding: 30px; color: var(--secondary);">
+                    No visitor records found.
+                </div>
+                <div class="table-wrap" id="analyticsVisitsTableWrap" style="display: none;">
+                    <table class="data-table" style="font-size: 0.82rem;">
+                        <thead>
+                            <tr>
+                                <th>Date & Time</th>
+                                <th>Update Viewed</th>
+                                <th>IP Address</th>
+                                <th>Location Access</th>
+                                <th>Coordinates / Map</th>
+                                <th>Session ID</th>
+                            </tr>
+                        </thead>
+                        <tbody id="analyticsVisitsTbody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Clicks Tab Content -->
+            <div id="analyticsClicksTab" style="display: none;">
+                <div id="analyticsClicksEmpty" style="display: none; text-align: center; padding: 30px; color: var(--secondary);">
+                    No button interaction clicks recorded yet.
+                </div>
+                <div class="table-wrap" id="analyticsClicksTableWrap" style="display: none;">
+                    <table class="data-table" style="font-size: 0.82rem;">
+                        <thead>
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>Update</th>
+                                <th>Action / Button</th>
+                                <th>Target / Context</th>
+                                <th>Session ID</th>
+                            </tr>
+                        </thead>
+                        <tbody id="analyticsClicksTbody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div class="modal-foot" style="padding: 12px 22px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--card);">
+            <div style="font-size: 0.75rem; color: var(--secondary);">
+                <i class="fas fa-shield-halved"></i> Privacy-conscious analytics. Raw coordinates shown only with voluntary user consent.
+            </div>
+            <button type="button" class="btn btn-outline" onclick="closeViewAnalytics()">Close</button>
+        </div>
+    </div>
+</div>
+
+<script>
+function openViewAnalytics(postId, postTitle) {
+    var modal = document.getElementById('analyticsModal');
+    var subtitle = document.getElementById('analyticsModalSubtitle');
+    var loading = document.getElementById('analyticsLoading');
+    var emptyV = document.getElementById('analyticsVisitsEmpty');
+    var wrapV = document.getElementById('analyticsVisitsTableWrap');
+    var tbodyV = document.getElementById('analyticsVisitsTbody');
+    var countV = document.getElementById('analyticsVisitsCount');
+    var emptyC = document.getElementById('analyticsClicksEmpty');
+    var wrapC = document.getElementById('analyticsClicksTableWrap');
+    var tbodyC = document.getElementById('analyticsClicksTbody');
+    var countC = document.getElementById('analyticsClicksCount');
+
+    subtitle.textContent = postTitle ? postTitle : 'All Updates Overview';
+    loading.style.display = 'block';
+    emptyV.style.display = 'none';
+    wrapV.style.display = 'none';
+    emptyC.style.display = 'none';
+    wrapC.style.display = 'none';
+    tbodyV.innerHTML = '';
+    tbodyC.innerHTML = '';
+    countV.textContent = '0';
+    countC.textContent = '0';
+    switchAnalyticsTab('visits');
+
+    modal.style.display = 'flex';
+
+    fetch('pepp-updates-posts.php?action=analytics_data' + (postId ? ('&post_id=' + postId) : ''))
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+            loading.style.display = 'none';
+            if (!data.ok || !data.visits) {
+                emptyV.style.display = 'block';
+                return;
+            }
+
+            var visits = data.visits || [];
+            var clicks = data.clicks || [];
+            countV.textContent = visits.length;
+            countC.textContent = clicks.length;
+
+            if (visits.length === 0) {
+                emptyV.style.display = 'block';
+            } else {
+                wrapV.style.display = 'block';
+                visits.forEach(function(v) {
+                    var tr = document.createElement('tr');
+
+                    var locHtml = '<span class="badge gray">Not Shared</span>';
+                    var mapHtml = '<span style="color:var(--secondary);font-size:0.75rem;">—</span>';
+                    if (v.location_status === 'granted' && v.latitude && v.longitude) {
+                        locHtml = '<span class="badge green"><i class="fas fa-location-dot"></i> Granted</span>';
+                        var lat = parseFloat(v.latitude).toFixed(4);
+                        var lng = parseFloat(v.longitude).toFixed(4);
+                        var mapsUrl = 'https://www.google.com/maps?q=' + v.latitude + ',' + v.longitude;
+                        mapHtml = '<a href="' + mapsUrl + '" target="_blank" class="btn btn-sm btn-outline" style="font-size:0.72rem;padding:2px 7px;display:inline-flex;align-items:center;gap:4px;" title="Open in Google Maps">' +
+                                  '<i class="fas fa-map-location-dot" style="color:#ea4335;"></i> ' + lat + ', ' + lng + '</a>';
+                    } else if (v.location_status === 'denied') {
+                        locHtml = '<span class="badge red"><i class="fas fa-ban"></i> Denied</span>';
+                    }
+
+                    var ipDisplay = v.ip_address || (v.ip_hash ? ('Hash: ' + v.ip_hash.substring(0, 10) + '...') : 'Unknown');
+                    var sessDisplay = v.session_id ? ('<code>' + v.session_id.substring(0, 8) + '...</code>') : '<span style="color:var(--secondary);">—</span>';
+
+                    tr.innerHTML = '<td>' + (v.created_at || v.visit_date) + '</td>' +
+                                   '<td><strong>' + (v.post_title || 'Homepage') + '</strong></td>' +
+                                   '<td><code>' + ipDisplay + '</code></td>' +
+                                   '<td>' + locHtml + '</td>' +
+                                   '<td>' + mapHtml + '</td>' +
+                                   '<td>' + sessDisplay + '</td>';
+                    tbodyV.appendChild(tr);
+                });
+            }
+
+            if (clicks.length === 0) {
+                emptyC.style.display = 'block';
+            } else {
+                wrapC.style.display = 'block';
+                clicks.forEach(function(c) {
+                    var tr = document.createElement('tr');
+                    var sessDisplay = c.session_id ? ('<code>' + c.session_id.substring(0, 8) + '...</code>') : '—';
+                    var targetDisplay = c.target_url ? ('<a href="' + c.target_url + '" target="_blank" style="font-size:0.75rem;color:var(--accent);">' + c.target_url.substring(0, 30) + '...</a>') : '—';
+                    tr.innerHTML = '<td>' + c.created_at + '</td>' +
+                                   '<td>' + (c.post_title || 'General') + '</td>' +
+                                   '<td><span class="badge blue">' + (c.action_name || c.button_name || 'click') + '</span></td>' +
+                                   '<td>' + targetDisplay + '</td>' +
+                                   '<td>' + sessDisplay + '</td>';
+                    tbodyC.appendChild(tr);
+                });
+            }
+        })
+        .catch(function(err) {
+            loading.style.display = 'none';
+            emptyV.textContent = 'Error loading analytics: ' + err.message;
+            emptyV.style.display = 'block';
+        });
+}
+
+function closeViewAnalytics() {
+    document.getElementById('analyticsModal').style.display = 'none';
+}
+
+function switchAnalyticsTab(tab) {
+    var vTab = document.getElementById('analyticsVisitsTab');
+    var cTab = document.getElementById('analyticsClicksTab');
+    var vBtn = document.getElementById('tabVisitsBtn');
+    var cBtn = document.getElementById('tabClicksBtn');
+
+    if (tab === 'visits') {
+        vTab.style.display = 'block';
+        cTab.style.display = 'none';
+        vBtn.className = 'btn btn-sm btn-primary';
+        cBtn.className = 'btn btn-sm btn-outline';
+    } else {
+        vTab.style.display = 'none';
+        cTab.style.display = 'block';
+        vBtn.className = 'btn btn-sm btn-outline';
+        cBtn.className = 'btn btn-sm btn-primary';
+    }
+}
+</script>
 
 <?php
 include 'includes/admin_footer.php';

@@ -25,6 +25,51 @@ function pepp_public_get_setting(PDO $pdo, string $key, $default = null) {
     }
 }
 
+if (!function_exists('pepp_updates_column_exists')) {
+    function pepp_updates_column_exists(PDO $pdo, string $table, string $column): bool {
+        try {
+            $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            if ($driver === 'sqlite') {
+                $cleanTable = preg_replace('/[^a-zA-Z0-9_]/', '', $table);
+                $stmt = $pdo->query("PRAGMA table_info(" . $cleanTable . ")");
+                if ($stmt) {
+                    $cols = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                    foreach ($cols as $c) {
+                        if (strcasecmp($c['name'], $column) === 0) return true;
+                    }
+                }
+                return false;
+            }
+            $stmt = $pdo->prepare("
+                SELECT COUNT(*) FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?
+            ");
+            $stmt->execute([$table, $column]);
+            return ((int)$stmt->fetchColumn()) > 0;
+        } catch (Throwable $e) {
+            return false;
+        }
+    }
+}
+
+if (!function_exists('pepp_updates_table_exists')) {
+    function pepp_updates_table_exists(PDO $pdo, string $table): bool {
+        try {
+            $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            if ($driver === 'sqlite') {
+                $stmt = $pdo->prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?");
+                $stmt->execute([$table]);
+                return (bool)$stmt->fetchColumn();
+            }
+            $stmt = $pdo->prepare("SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?");
+            $stmt->execute([$table]);
+            return (bool)$stmt->fetchColumn();
+        } catch (Throwable $e) {
+            return false;
+        }
+    }
+}
+
 /**
  * Returns the configurable duration (in days) for the NEW badge.
  * Defaults to 7 days if setting is missing or invalid.
@@ -255,9 +300,63 @@ function pepp_public_sanitize_html(?string $html): string {
     return trim($result);
 }
 
+if (!function_exists('pepp_updates_column_exists')) {
+    /**
+     * Checks if a specific column exists in a PEPP Updates table.
+     */
+    function pepp_updates_column_exists(PDO $pdo, string $tableName, string $columnName): bool {
+        static $cache = [];
+        $k = "{$tableName}.{$columnName}";
+        if (isset($cache[$k])) return $cache[$k];
+        try {
+            $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            if ($driver === 'sqlite') {
+                $stmt = $pdo->query("PRAGMA table_info({$tableName})");
+                $cols = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                foreach ($cols as $col) {
+                    if (strcasecmp($col['name'] ?? '', $columnName) === 0) {
+                        return $cache[$k] = true;
+                    }
+                }
+                return $cache[$k] = false;
+            } else {
+                $stmt = $pdo->prepare("SHOW COLUMNS FROM `{$tableName}` LIKE ?");
+                $stmt->execute([$columnName]);
+                return $cache[$k] = (bool)$stmt->fetch();
+            }
+        } catch (Throwable $e) {
+            return $cache[$k] = false;
+        }
+    }
+}
+
+if (!function_exists('pepp_updates_table_exists')) {
+    /**
+     * Checks if a specific table exists.
+     */
+    function pepp_updates_table_exists(PDO $pdo, string $tableName): bool {
+        static $cache = [];
+        if (isset($cache[$tableName])) return $cache[$tableName];
+        try {
+            $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            if ($driver === 'sqlite') {
+                $stmt = $pdo->prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?");
+                $stmt->execute([$tableName]);
+                return $cache[$tableName] = (bool)$stmt->fetchColumn();
+            } else {
+                $stmt = $pdo->prepare("SHOW TABLES LIKE ?");
+                $stmt->execute([$tableName]);
+                return $cache[$tableName] = (bool)$stmt->fetchColumn();
+            }
+        } catch (Throwable $e) {
+            return $cache[$tableName] = false;
+        }
+    }
+}
+
 /**
  * Privacy-conscious visitor logging.
- * Uses SHA-256 daily hashed IP. Never stores raw IP. Deduplicates daily per post.
+ * Uses SHA-256 daily hashed IP. Never stores raw IP by default. Deduplicates daily per post.
  */
 function pepp_public_log_visit(PDO $pdo, ?int $postId = null): void {
     try {
@@ -282,15 +381,76 @@ function pepp_public_log_visit(PDO $pdo, ?int $postId = null): void {
             return; // Already counted today
         }
 
-        // Insert daily hashed visit record
-        $stmtIns = $pdo->prepare("
-            INSERT INTO updates_visits (post_id, ip_hash, user_agent, referer, visit_date, created_at)
-            VALUES (?, ?, ?, ?, ?, " . ($driver === 'sqlite' ? "datetime('now')" : "NOW()") . ")
-        ");
-        
         $ua = substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 150);
         $ref = substr($_SERVER['HTTP_REFERER'] ?? '', 0, 250);
-        $stmtIns->execute([$postId, $ipHash, $ua ?: null, $ref ?: null, $today]);
+
+        // Visitor session ID
+        $sessionId = $_COOKIE['pepp_session_id'] ?? null;
+        if (!$sessionId || !preg_match('/^[a-f0-9]{32,64}$/i', $sessionId)) {
+            $sessionId = bin2hex(random_bytes(16));
+            if (!headers_sent()) {
+                setcookie('pepp_session_id', $sessionId, time() + 86400 * 30, '/', '', false, true);
+            }
+        }
+
+        // Check if extended analytics columns exist (Migration 65)
+        $hasSess = pepp_updates_column_exists($pdo, 'updates_visits', 'session_id');
+        $hasLoc = pepp_updates_column_exists($pdo, 'updates_visits', 'location_status');
+        $hasIp = pepp_updates_column_exists($pdo, 'updates_visits', 'ip_address');
+
+        // Check user location in session
+        $locData = $_SESSION['pepp_user_location'] ?? null;
+        $locStatus = $locData['status'] ?? null;
+        $lat = !empty($locData['lat']) ? (float)$locData['lat'] : null;
+        $lng = !empty($locData['lng']) ? (float)$locData['lng'] : null;
+        $acc = !empty($locData['accuracy']) ? (float)$locData['accuracy'] : null;
+
+        if ($hasSess || $hasLoc || $hasIp) {
+            $cols = ['post_id', 'ip_hash', 'user_agent', 'referer', 'visit_date'];
+            $vals = [$postId, $ipHash, $ua ?: null, $ref ?: null, $today];
+            $placeholders = ['?', '?', '?', '?', '?'];
+
+            if ($hasSess) {
+                $cols[] = 'session_id';
+                $vals[] = $sessionId;
+                $placeholders[] = '?';
+            }
+            if ($hasIp) {
+                $cols[] = 'ip_address';
+                $vals[] = $ip;
+                $placeholders[] = '?';
+            }
+            if ($hasLoc && $locStatus) {
+                $cols[] = 'location_status';
+                $vals[] = $locStatus;
+                $placeholders[] = '?';
+
+                $cols[] = 'latitude';
+                $vals[] = $lat;
+                $placeholders[] = '?';
+
+                $cols[] = 'longitude';
+                $vals[] = $lng;
+                $placeholders[] = '?';
+
+                $cols[] = 'accuracy';
+                $vals[] = $acc;
+                $placeholders[] = '?';
+            }
+
+            $cols[] = 'created_at';
+            $nowFunc = ($driver === 'sqlite') ? "datetime('now')" : "NOW()";
+            $sqlIns = "INSERT INTO updates_visits (" . implode(', ', $cols) . ") VALUES (" . implode(', ', $placeholders) . ", {$nowFunc})";
+            $stmtIns = $pdo->prepare($sqlIns);
+            $stmtIns->execute($vals);
+        } else {
+            // Standard baseline insert
+            $stmtIns = $pdo->prepare("
+                INSERT INTO updates_visits (post_id, ip_hash, user_agent, referer, visit_date, created_at)
+                VALUES (?, ?, ?, ?, ?, " . ($driver === 'sqlite' ? "datetime('now')" : "NOW()") . ")
+            ");
+            $stmtIns->execute([$postId, $ipHash, $ua ?: null, $ref ?: null, $today]);
+        }
 
         // Increment post view count atomically if this is a post view
         if ($postId !== null) {
@@ -337,13 +497,13 @@ function pepp_public_get_posts(PDO $pdo, array $options = []): array {
     $params = [];
 
     if ($catId !== null) {
-        $where[] = "EXISTS (SELECT 1 FROM updates_post_categories upc WHERE upc.post_id = p.id AND upc.category_id = ?)";
+        $where[] = "p.id IN (SELECT f_upc.post_id FROM updates_post_categories f_upc WHERE f_upc.category_id = ?)";
         $params[] = $catId;
     } elseif ($catSlug !== null) {
-        $where[] = "EXISTS (
-            SELECT 1 FROM updates_post_categories upc 
-            JOIN updates_categories uc ON uc.id = upc.category_id 
-            WHERE upc.post_id = p.id AND uc.slug = ? AND uc.is_active = 1
+        $where[] = "p.id IN (
+            SELECT f_upc.post_id FROM updates_post_categories f_upc
+            JOIN updates_categories f_uc ON f_uc.id = f_upc.category_id
+            WHERE f_uc.slug = ? AND f_uc.is_active = 1
         )";
         $params[] = $catSlug;
     }
@@ -365,6 +525,7 @@ function pepp_public_get_posts(PDO $pdo, array $options = []): array {
 
     $sql = "
         SELECT p.*,
+               COALESCE(p.view_count, (SELECT COUNT(*) FROM updates_visits v WHERE v.post_id = p.id), 0) AS view_count,
                {$catConcatSql} AS category_names
         FROM updates_posts p
         LEFT JOIN updates_post_categories upc ON upc.post_id = p.id
@@ -416,7 +577,8 @@ function pepp_public_get_post_by_slug(PDO $pdo, string $slug): ?array {
     $nowSql = ($driver === 'sqlite') ? "datetime('now')" : "NOW()";
 
     $sql = "
-        SELECT p.*
+        SELECT p.*,
+               COALESCE(p.view_count, (SELECT COUNT(*) FROM updates_visits v WHERE v.post_id = p.id), 0) AS view_count
         FROM updates_posts p
         WHERE p.slug = ?
           AND p.status = 'published'
@@ -525,7 +687,8 @@ function pepp_public_get_related_posts(PDO $pdo, int $currentPostId, array $cate
     $inPlaceholders = implode(',', array_fill(0, count($categoryIds), '?'));
 
     $sql = "
-        SELECT DISTINCT p.id, p.title, p.slug, p.short_description, p.banner_image, p.publish_at, p.expires_at, p.status
+        SELECT DISTINCT p.id, p.title, p.slug, p.short_description, p.banner_image, p.publish_at, p.expires_at, p.status,
+               COALESCE(p.view_count, (SELECT COUNT(*) FROM updates_visits v WHERE v.post_id = p.id), 0) AS view_count
         FROM updates_posts p
         JOIN updates_post_categories upc ON upc.post_id = p.id
         WHERE upc.category_id IN ({$inPlaceholders})

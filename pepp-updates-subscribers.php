@@ -91,8 +91,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_subscriber_cat
 // ─────────────────────────────────────────────────────────────
 // STATUS LIFECYCLE TRANSITION (Soft Status Change ONLY)
 // ─────────────────────────────────────────────────────────────
-if ($action === 'change_status' && isset($_GET['id']) && isset($_GET['new_status']) && isset($_GET['csrf_token'])) {
-    if (!csrf_verify()) {
+if ($action === 'change_status' && isset($_GET['id']) && isset($_GET['new_status'])) {
+    $token = $_POST['csrf_token'] ?? $_GET['csrf_token'] ?? $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+    if (!verify_csrf_token($token)) {
         $flash_error = 'Invalid security token.';
     } else {
         $sub_id = (int)$_GET['id'];

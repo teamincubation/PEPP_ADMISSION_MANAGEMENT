@@ -33,12 +33,14 @@ require_once __DIR__ . '/includes/header.php';
         <div class="rich-content">
             <p>At <strong>PEPP Updates</strong> (an initiative of PEPP Learning), accessible from <a href="https://updates.pepplearning.in">updates.pepplearning.in</a>, the privacy of our visitors and students is of paramount importance to us. This Privacy Policy document outlines the types of information that is collected and recorded by PEPP Updates and how we use it.</p>
 
-            <h2>1. Privacy-Conscious Architecture</h2>
-            <p>PEPP Updates is built with privacy-first engineering principles:</p>
+            <h2>1. Visitor & Interaction Analytics</h2>
+            <p>To measure audience reach, ensure operational security, and deliver relevant educational updates, PEPP Updates collects visitor and interaction analytics:</p>
             <ul>
-                <li><strong>No Raw IP Storage:</strong> We do not store raw IP addresses in our visitor analytics. Visitor logs utilize daily cryptographic hashes (SHA-256) with rolling salts, rendering cross-day user tracking impossible.</li>
-                <li><strong>No Invasive Cookies:</strong> The public PEPP Updates website does not employ third-party tracking cookies or advertising pixels.</li>
-                <li><strong>Read-Only Public Portal:</strong> Public browsing requires no account creation, logins, or social tracking scripts.</li>
+                <li><strong>Visitor Analytics &amp; IP Addresses:</strong> When you visit the portal, our servers record visitor analytics including page views, timestamps, referer headers, user agent device information, and your IP address for security monitoring and regional traffic analysis.</li>
+                <li><strong>Session &amp; Visitor Telemetry:</strong> We use a first-party session identifier to correlate visits within a session, track aggregate read counts, and prevent redundant prompt displays.</li>
+                <li><strong>Button &amp; Interaction Analytics:</strong> Interactions with call-to-action (CTA) buttons, external application links, and update sharing options are recorded to measure student engagement with specific alerts.</li>
+                <li><strong>Optional Browser Geolocation:</strong> To offer district-specific admission and exam notifications, PEPP Updates may display a voluntary location request. If and only if you explicitly choose "Allow" and grant browser permission, approximate latitude, longitude, and accuracy coordinates are collected. Geolocation is entirely optional, and the portal operates with full functionality if permission is denied or dismissed. No coordinates are collected without explicit user consent.</li>
+                <li><strong>Restricted Administrator Access:</strong> All visitor records, telemetry, interaction data, and analytics are confidential and accessible solely to authorized PEPP Updates administrators through authenticated administration panels.</li>
             </ul>
 
             <h2>2. WhatsApp Subscription Information</h2>

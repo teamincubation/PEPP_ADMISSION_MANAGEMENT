@@ -237,11 +237,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['post_action_submit'])
 // ─────────────────────────────────────────────────────────────
 // STATE CHANGE: QUICK PUBLISH / DRAFT TOGGLE
 // ─────────────────────────────────────────────────────────────
-if ($action === 'toggle_publish' && isset($_GET['id']) && isset($_GET['csrf_token'])) {
-    if (!csrf_verify()) {
+$is_toggle = ($action === 'toggle_publish' || (isset($_POST['action']) && $_POST['action'] === 'toggle_publish'));
+$toggle_id = !empty($_POST['id']) ? (int)$_POST['id'] : (!empty($_GET['id']) ? (int)$_GET['id'] : 0);
+if ($is_toggle && $toggle_id > 0) {
+    $token = $_POST['csrf_token'] ?? $_GET['csrf_token'] ?? $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+    if (!verify_csrf_token($token)) {
         $flash_error = 'Invalid security token.';
     } else {
-        $toggle_id = (int)$_GET['id'];
         try {
             $stmt = $pdo->prepare("SELECT status, publish_at FROM updates_posts WHERE id = ?");
             $stmt->execute([$toggle_id]);
@@ -266,13 +268,15 @@ if ($action === 'toggle_publish' && isset($_GET['id']) && isset($_GET['csrf_toke
 }
 
 // ─────────────────────────────────────────────────────────────
-// DELETE POST
+// DELETE POST (Supports Secure POST and GET with CSRF validation)
 // ─────────────────────────────────────────────────────────────
-if ($action === 'delete' && isset($_GET['id']) && isset($_GET['csrf_token'])) {
-    if (!csrf_verify()) {
+$is_delete = ($action === 'delete' || (isset($_POST['action']) && $_POST['action'] === 'delete'));
+$del_id = !empty($_POST['id']) ? (int)$_POST['id'] : (!empty($_GET['id']) ? (int)$_GET['id'] : 0);
+if ($is_delete && $del_id > 0) {
+    $token = $_POST['csrf_token'] ?? $_GET['csrf_token'] ?? $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+    if (!verify_csrf_token($token)) {
         $flash_error = 'Invalid security token.';
     } else {
-        $del_id = (int)$_GET['id'];
         try {
             // Check if post is referenced in delivery campaigns (fk_udc_post ON DELETE RESTRICT)
             $stmt_check = $pdo->prepare("SELECT COUNT(*) FROM updates_delivery_campaigns WHERE post_id = ?");
@@ -306,6 +310,64 @@ if ($action === 'delete' && isset($_GET['id']) && isset($_GET['csrf_token'])) {
         }
     }
     $action = 'list';
+}
+
+// ─────────────────────────────────────────────────────────────
+// AJAX VISITOR & CLICK ANALYTICS (Section D)
+// ─────────────────────────────────────────────────────────────
+if ($action === 'analytics_data') {
+    header('Content-Type: application/json; charset=utf-8');
+    $analytics_post_id = !empty($_GET['post_id']) ? (int)$_GET['post_id'] : null;
+    try {
+        $hasLoc = pepp_updates_column_exists($pdo, 'updates_visits', 'latitude');
+        $hasIp = pepp_updates_column_exists($pdo, 'updates_visits', 'ip_address');
+        $hasSess = pepp_updates_column_exists($pdo, 'updates_visits', 'session_id');
+        $hasClicks = pepp_updates_table_exists($pdo, 'updates_clicks');
+
+        $locCols = $hasLoc
+            ? "v.location_status, v.latitude, v.longitude, v.accuracy"
+            : "NULL AS location_status, NULL AS latitude, NULL AS longitude, NULL AS accuracy";
+        $ipCol = $hasIp ? "v.ip_address" : "NULL AS ip_address";
+        $sessCol = $hasSess ? "v.session_id" : "NULL AS session_id";
+
+        $sql = "
+            SELECT v.id, v.post_id, COALESCE(p.title, 'Homepage') AS post_title,
+                   v.visit_date, v.created_at, v.user_agent, v.referer, v.ip_hash,
+                   {$locCols}, {$ipCol}, {$sessCol}
+            FROM updates_visits v
+            LEFT JOIN updates_posts p ON p.id = v.post_id
+            " . ($analytics_post_id ? "WHERE v.post_id = ?" : "") . "
+            ORDER BY v.id DESC
+            LIMIT 50
+        ";
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($analytics_post_id ? [$analytics_post_id] : []);
+        $visits = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $clicks = [];
+        if ($hasClicks) {
+            $sqlC = "
+                SELECT c.*, COALESCE(p.title, 'General') AS post_title
+                FROM updates_clicks c
+                LEFT JOIN updates_posts p ON p.id = c.post_id
+                " . ($analytics_post_id ? "WHERE c.post_id = ?" : "") . "
+                ORDER BY c.id DESC
+                LIMIT 50
+            ";
+            $stmtC = $pdo->prepare($sqlC);
+            $stmtC->execute($analytics_post_id ? [$analytics_post_id] : []);
+            $clicks = $stmtC->fetchAll(PDO::FETCH_ASSOC);
+        }
+
+        echo json_encode([
+            'ok' => true,
+            'visits' => $visits,
+            'clicks' => $clicks
+        ]);
+    } catch (Throwable $e) {
+        echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -391,9 +453,12 @@ if ($action === 'list' && pepp_updates_tables_exist($pdo)) {
         $total_posts_count = (int)$stmt_cnt->fetchColumn();
 
         // Fetch paginated rows with category names and view count
+        $catConcat = ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite')
+            ? "GROUP_CONCAT(DISTINCT c.name) AS categories_list,"
+            : "GROUP_CONCAT(DISTINCT c.name ORDER BY c.name SEPARATOR ', ') AS categories_list,";
         $sql = "
             SELECT p.*,
-                   GROUP_CONCAT(DISTINCT c.name ORDER BY c.name SEPARATOR ', ') AS categories_list,
+                   {$catConcat}
                    COUNT(DISTINCT v.id) AS visit_count
             FROM updates_posts p
             LEFT JOIN updates_post_categories upc ON upc.post_id = p.id
@@ -925,9 +990,12 @@ include 'includes/admin_nav.php';
                                         </span>
                                     </td>
                                     <td>
-                                        <span class="badge gray">
-                                            <i class="fas fa-eye" style="font-size: 0.65rem;"></i> <?php echo number_format((int)($p['visit_count'] ?? 0)); ?>
-                                        </span>
+                                        <button type="button" class="btn btn-sm btn-outline" style="font-size: 0.76rem; padding: 2px 7px; border-radius: 6px; display: inline-flex; align-items: center; gap: 4px;"
+                                                onclick="openViewAnalytics(<?php echo (int)$p['id']; ?>, <?php echo htmlspecialchars(json_encode($p['title']), ENT_QUOTES, 'UTF-8'); ?>)"
+                                                title="Click to view detailed visitor analytics">
+                                            <i class="fas fa-chart-line" style="font-size: 0.7rem; color: var(--accent);"></i>
+                                            <span><?php echo number_format((int)($p['visit_count'] ?? 0)); ?></span>
+                                        </button>
                                     </td>
                                     <td>
                                         <span class="cell-sub">
@@ -937,9 +1005,10 @@ include 'includes/admin_nav.php';
                                     <td style="text-align: right;">
                                         <div style="display: inline-flex; gap: 6px; align-items: center;">
                                             <!-- Read-only Preview Modal Button -->
-                                            <button type="button" class="btn btn-sm btn-outline" title="Preview Update" 
+                                            <button type="button" class="btn btn-sm btn-outline" title="Preview Update"
                                                     onclick="openPostPreview(<?php echo htmlspecialchars(json_encode([
                                                         'id' => $p['id'],
+                                                        'slug' => $p['slug'],
                                                         'title' => $p['title'],
                                                         'banner' => $p['banner_image'],
                                                         'short_desc' => $p['short_description'],
@@ -974,12 +1043,11 @@ include 'includes/admin_nav.php';
                                                 </a>
                                             <?php endif; ?>
 
-                                            <!-- Delete Post -->
-                                            <a href="pepp-updates-posts.php?action=delete&id=<?php echo (int)$p['id']; ?>&csrf_token=<?php echo csrf_token(); ?>" 
-                                               class="btn btn-sm btn-soft-red" title="Delete Post" 
-                                               onclick="return confirm('Are you sure you want to permanently delete post #<?php echo (int)$p['id']; ?>? This action cannot be undone.');">
+                                            <!-- Delete Post (Secure POST Form) -->
+                                            <button type="button" class="btn btn-sm btn-soft-red" title="Delete Post"
+                                                    onclick="confirmDeletePost(<?php echo (int)$p['id']; ?>, <?php echo htmlspecialchars(json_encode($p['title']), ENT_QUOTES, 'UTF-8'); ?>)">
                                                 <i class="fas fa-trash"></i>
-                                            </a>
+                                            </button>
                                         </div>
                                     </td>
                                 </tr>
@@ -1063,7 +1131,102 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
+<!-- Hidden Delete Form (Enforces Secure POST + CSRF) -->
+<form id="deletePostForm" method="POST" action="pepp-updates-posts.php" style="display: none;">
+    <input type="hidden" name="action" value="delete">
+    <input type="hidden" name="id" id="deletePostId" value="">
+    <?php echo csrf_field(); ?>
+</form>
+
+<!-- ─────────────────────────────────────────────────────────────
+     VISITOR & VIEW ANALYTICS MODAL (Section D)
+     ───────────────────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="analyticsModal" style="display: none; position: fixed; inset: 0; background: rgba(15,23,42,0.6); z-index: 999; align-items: center; justify-content: center; padding: 20px;">
+    <div class="modal-box" style="background: var(--surface); border-radius: 14px; max-width: 900px; width: 100%; max-height: 88vh; overflow-y: auto; box-shadow: 0 20px 45px rgba(0,0,0,0.2); border: 1px solid var(--border);">
+        <div class="modal-head" style="display: flex; align-items: center; justify-content: space-between; padding: 16px 22px; border-bottom: 1px solid var(--border);">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <div class="head-icon" style="color: var(--accent);"><i class="fas fa-chart-line"></i></div>
+                <div>
+                    <h3 style="margin: 0; font-size: 1.05rem; font-weight: 700;">Visitor & View Analytics</h3>
+                    <div id="analyticsModalSubtitle" style="font-size: 0.8rem; color: var(--secondary);">Loading analytics...</div>
+                </div>
+            </div>
+            <button type="button" class="btn btn-sm btn-outline" onclick="closeViewAnalytics()" style="font-size: 1rem; padding: 4px 10px;">&times;</button>
+        </div>
+        <div class="modal-body" style="padding: 22px;">
+            <!-- Tabs: Visits vs Clicks -->
+            <div style="display: flex; gap: 10px; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 10px;">
+                <button type="button" id="tabVisitsBtn" class="btn btn-sm btn-primary" onclick="switchAnalyticsTab('visits')">
+                    <i class="fas fa-eye"></i> Page Visits (<span id="analyticsVisitsCount">0</span>)
+                </button>
+                <button type="button" id="tabClicksBtn" class="btn btn-sm btn-outline" onclick="switchAnalyticsTab('clicks')">
+                    <i class="fas fa-hand-pointer"></i> Tracked Button Clicks (<span id="analyticsClicksCount">0</span>)
+                </button>
+            </div>
+
+            <!-- Visits Tab Content -->
+            <div id="analyticsVisitsTab">
+                <div id="analyticsLoading" style="text-align: center; padding: 30px; color: var(--secondary);">
+                    <i class="fas fa-circle-notch fa-spin"></i> Loading visitor activity...
+                </div>
+                <div id="analyticsVisitsEmpty" style="display: none; text-align: center; padding: 30px; color: var(--secondary);">
+                    No visitor records found for this update.
+                </div>
+                <div class="table-wrap" id="analyticsVisitsTableWrap" style="display: none;">
+                    <table class="data-table" style="font-size: 0.82rem;">
+                        <thead>
+                            <tr>
+                                <th>Date & Time</th>
+                                <th>IP Address</th>
+                                <th>Location Access</th>
+                                <th>Coordinates / Map</th>
+                                <th>Session ID</th>
+                                <th>Referer / Device</th>
+                            </tr>
+                        </thead>
+                        <tbody id="analyticsVisitsTbody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Clicks Tab Content -->
+            <div id="analyticsClicksTab" style="display: none;">
+                <div id="analyticsClicksEmpty" style="display: none; text-align: center; padding: 30px; color: var(--secondary);">
+                    No button interaction clicks recorded yet.
+                </div>
+                <div class="table-wrap" id="analyticsClicksTableWrap" style="display: none;">
+                    <table class="data-table" style="font-size: 0.82rem;">
+                        <thead>
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>Action / Button</th>
+                                <th>Target / Context</th>
+                                <th>Session ID</th>
+                            </tr>
+                        </thead>
+                        <tbody id="analyticsClicksTbody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div class="modal-foot" style="padding: 12px 22px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--card);">
+            <div style="font-size: 0.75rem; color: var(--secondary);">
+                <i class="fas fa-shield-halved"></i> Privacy-conscious analytics. Raw coordinates shown only with voluntary user consent.
+            </div>
+            <button type="button" class="btn btn-outline" onclick="closeViewAnalytics()">Close</button>
+        </div>
+    </div>
+</div>
+
 <script>
+function confirmDeletePost(id, title) {
+    if (confirm('Are you sure you want to permanently delete "' + title + '" (Post #' + id + ')? This action cannot be undone.')) {
+        document.getElementById('deletePostId').value = id;
+        document.getElementById('deletePostForm').submit();
+    }
+    return false;
+}
+
 function openPostPreview(data) {
     document.getElementById('pvTitle').textContent = data.title || '';
     
@@ -1111,6 +1274,128 @@ function openPostPreview(data) {
 
 function closePostPreview() {
     document.getElementById('previewModal').style.display = 'none';
+}
+
+function openViewAnalytics(postId, postTitle) {
+    var modal = document.getElementById('analyticsModal');
+    var subtitle = document.getElementById('analyticsModalSubtitle');
+    var loading = document.getElementById('analyticsLoading');
+    var emptyV = document.getElementById('analyticsVisitsEmpty');
+    var wrapV = document.getElementById('analyticsVisitsTableWrap');
+    var tbodyV = document.getElementById('analyticsVisitsTbody');
+    var countV = document.getElementById('analyticsVisitsCount');
+    var emptyC = document.getElementById('analyticsClicksEmpty');
+    var wrapC = document.getElementById('analyticsClicksTableWrap');
+    var tbodyC = document.getElementById('analyticsClicksTbody');
+    var countC = document.getElementById('analyticsClicksCount');
+
+    subtitle.textContent = postTitle ? ('Post: ' + postTitle + ' (#' + postId + ')') : 'All Updates Overview';
+    loading.style.display = 'block';
+    emptyV.style.display = 'none';
+    wrapV.style.display = 'none';
+    emptyC.style.display = 'none';
+    wrapC.style.display = 'none';
+    tbodyV.innerHTML = '';
+    tbodyC.innerHTML = '';
+    countV.textContent = '0';
+    countC.textContent = '0';
+    switchAnalyticsTab('visits');
+
+    modal.style.display = 'flex';
+
+    fetch('pepp-updates-posts.php?action=analytics_data' + (postId ? ('&post_id=' + postId) : ''))
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+            loading.style.display = 'none';
+            if (!data.ok || !data.visits) {
+                emptyV.style.display = 'block';
+                return;
+            }
+
+            var visits = data.visits || [];
+            var clicks = data.clicks || [];
+            countV.textContent = visits.length;
+            countC.textContent = clicks.length;
+
+            if (visits.length === 0) {
+                emptyV.style.display = 'block';
+            } else {
+                wrapV.style.display = 'block';
+                visits.forEach(function(v) {
+                    var tr = document.createElement('tr');
+
+                    // Location status badge & map link
+                    var locHtml = '<span class="badge gray">Not Shared</span>';
+                    var mapHtml = '<span style="color:var(--secondary);font-size:0.75rem;">—</span>';
+                    if (v.location_status === 'granted' && v.latitude && v.longitude) {
+                        locHtml = '<span class="badge green"><i class="fas fa-location-dot"></i> Granted</span>';
+                        var lat = parseFloat(v.latitude).toFixed(4);
+                        var lng = parseFloat(v.longitude).toFixed(4);
+                        var mapsUrl = 'https://www.google.com/maps?q=' + v.latitude + ',' + v.longitude;
+                        mapHtml = '<a href="' + mapsUrl + '" target="_blank" class="btn btn-sm btn-outline" style="font-size:0.72rem;padding:2px 7px;display:inline-flex;align-items:center;gap:4px;" title="Open in Google Maps">' +
+                                  '<i class="fas fa-map-location-dot" style="color:#ea4335;"></i> ' + lat + ', ' + lng + '</a>';
+                    } else if (v.location_status === 'denied') {
+                        locHtml = '<span class="badge red"><i class="fas fa-ban"></i> Denied</span>';
+                    }
+
+                    var ipDisplay = v.ip_address || (v.ip_hash ? ('Hash: ' + v.ip_hash.substring(0, 10) + '...') : 'Unknown');
+                    var sessDisplay = v.session_id ? ('<code>' + v.session_id.substring(0, 8) + '...</code>') : '<span style="color:var(--secondary);">—</span>';
+                    var refDisplay = v.referer ? ('<div style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + v.referer + '">' + v.referer + '</div>') : '<span style="color:var(--secondary);">Direct / None</span>';
+
+                    tr.innerHTML = '<td>' + (v.created_at || v.visit_date) + '</td>' +
+                                   '<td><code>' + ipDisplay + '</code></td>' +
+                                   '<td>' + locHtml + '</td>' +
+                                   '<td>' + mapHtml + '</td>' +
+                                   '<td>' + sessDisplay + '</td>' +
+                                   '<td>' + refDisplay + '</td>';
+                    tbodyV.appendChild(tr);
+                });
+            }
+
+            if (clicks.length === 0) {
+                emptyC.style.display = 'block';
+            } else {
+                wrapC.style.display = 'block';
+                clicks.forEach(function(c) {
+                    var tr = document.createElement('tr');
+                    var sessDisplay = c.session_id ? ('<code>' + c.session_id.substring(0, 8) + '...</code>') : '—';
+                    var targetDisplay = c.target_url ? ('<a href="' + c.target_url + '" target="_blank" style="font-size:0.75rem;color:var(--accent);">' + c.target_url.substring(0, 35) + '...</a>') : '—';
+                    tr.innerHTML = '<td>' + c.created_at + '</td>' +
+                                   '<td><span class="badge blue">' + (c.action_name || c.button_name || 'click') + '</span></td>' +
+                                   '<td>' + targetDisplay + '</td>' +
+                                   '<td>' + sessDisplay + '</td>';
+                    tbodyC.appendChild(tr);
+                });
+            }
+        })
+        .catch(function(err) {
+            loading.style.display = 'none';
+            emptyV.textContent = 'Error loading analytics: ' + err.message;
+            emptyV.style.display = 'block';
+        });
+}
+
+function closeViewAnalytics() {
+    document.getElementById('analyticsModal').style.display = 'none';
+}
+
+function switchAnalyticsTab(tab) {
+    var vTab = document.getElementById('analyticsVisitsTab');
+    var cTab = document.getElementById('analyticsClicksTab');
+    var vBtn = document.getElementById('tabVisitsBtn');
+    var cBtn = document.getElementById('tabClicksBtn');
+
+    if (tab === 'visits') {
+        vTab.style.display = 'block';
+        cTab.style.display = 'none';
+        vBtn.className = 'btn btn-sm btn-primary';
+        cBtn.className = 'btn btn-sm btn-outline';
+    } else {
+        vTab.style.display = 'none';
+        cTab.style.display = 'block';
+        vBtn.className = 'btn btn-sm btn-outline';
+        cBtn.className = 'btn btn-sm btn-primary';
+    }
 }
 </script>
 

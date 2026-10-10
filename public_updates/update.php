@@ -124,12 +124,10 @@ require_once __DIR__ . '/includes/header.php';
                 <span>Published on <?php echo date('F j, Y', strtotime($post['publish_at'])); ?></span>
             </div>
 
-            <?php if (!empty($post['view_count'])): ?>
-                <div style="display:flex;align-items:center;gap:4px;">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                    <span><?php echo number_format($post['view_count']); ?> views</span>
-                </div>
-            <?php endif; ?>
+            <div style="display:flex;align-items:center;gap:4px;">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                <span><?php echo number_format(max(1, (int)($post['view_count'] ?? 1))); ?> views</span>
+            </div>
         </div>
     </header>
 
@@ -146,8 +144,7 @@ require_once __DIR__ . '/includes/header.php';
         <div class="article-banner-wrap <?php echo $isExpired ? 'is-expired' : ''; ?>">
             <img src="<?php echo htmlspecialchars($bannerUrl); ?>" 
                  alt="<?php echo htmlspecialchars($post['title']); ?>" 
-                 width="1200" 
-                 height="630">
+                 loading="eager">
         </div>
     <?php endif; ?>
 
@@ -166,7 +163,7 @@ require_once __DIR__ . '/includes/header.php';
     <!-- External Action Button -->
     <?php if ($hasAction): ?>
         <div class="article-action-box">
-            <a href="<?php echo htmlspecialchars($actionUrl); ?>" target="_blank" rel="noopener noreferrer" class="btn-article-action">
+            <a href="<?php echo htmlspecialchars($actionUrl); ?>" target="_blank" rel="noopener noreferrer" class="btn-article-action" data-track-click="action_button" data-post-id="<?php echo (int)$post['id']; ?>" data-btn-name="<?php echo htmlspecialchars($actionText); ?>" data-target-url="<?php echo htmlspecialchars($actionUrl); ?>">
                 <span><?php echo htmlspecialchars($actionText); ?></span>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
             </a>
@@ -193,20 +190,20 @@ require_once __DIR__ . '/includes/header.php';
         </div>
 
         <div class="share-buttons">
-            <a href="<?php echo htmlspecialchars($shareLinks['whatsapp']); ?>" target="_blank" rel="noopener noreferrer" class="share-btn whatsapp" aria-label="Share on WhatsApp">
+            <a href="<?php echo htmlspecialchars($shareLinks['whatsapp']); ?>" target="_blank" rel="noopener noreferrer" class="share-btn whatsapp" aria-label="Share on WhatsApp" data-track-click="share_whatsapp" data-post-id="<?php echo (int)$post['id']; ?>">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
                 <span>WhatsApp</span>
             </a>
-            <a href="<?php echo htmlspecialchars($shareLinks['facebook']); ?>" target="_blank" rel="noopener noreferrer" class="share-btn facebook" aria-label="Share on Facebook">
+            <a href="<?php echo htmlspecialchars($shareLinks['facebook']); ?>" target="_blank" rel="noopener noreferrer" class="share-btn facebook" aria-label="Share on Facebook" data-track-click="share_facebook" data-post-id="<?php echo (int)$post['id']; ?>">
                 <span>Facebook</span>
             </a>
-            <a href="<?php echo htmlspecialchars($shareLinks['twitter']); ?>" target="_blank" rel="noopener noreferrer" class="share-btn twitter" aria-label="Share on X">
+            <a href="<?php echo htmlspecialchars($shareLinks['twitter']); ?>" target="_blank" rel="noopener noreferrer" class="share-btn twitter" aria-label="Share on X" data-track-click="share_twitter" data-post-id="<?php echo (int)$post['id']; ?>">
                 <span>X / Twitter</span>
             </a>
-            <a href="<?php echo htmlspecialchars($shareLinks['linkedin']); ?>" target="_blank" rel="noopener noreferrer" class="share-btn linkedin" aria-label="Share on LinkedIn">
+            <a href="<?php echo htmlspecialchars($shareLinks['linkedin']); ?>" target="_blank" rel="noopener noreferrer" class="share-btn linkedin" aria-label="Share on LinkedIn" data-track-click="share_linkedin" data-post-id="<?php echo (int)$post['id']; ?>">
                 <span>LinkedIn</span>
             </a>
-            <button type="button" class="share-btn copy" data-copy-link="<?php echo htmlspecialchars($currentUrl); ?>" aria-label="Copy Link">
+            <button type="button" class="share-btn copy" data-copy-link="<?php echo htmlspecialchars($currentUrl); ?>" aria-label="Copy Link" data-track-click="copy_link" data-post-id="<?php echo (int)$post['id']; ?>">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                 <span>Copy Link</span>
             </button>
