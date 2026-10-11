@@ -23,11 +23,65 @@ class PeppUpdatesAiService {
     private string $model;
     private ?object $customProvider;
 
-    public function __construct(?PDO $pdo = null, ?object $customProvider = null, string $model = 'gemini-2.5-flash') {
+    public function __construct(?PDO $pdo = null, ?object $customProvider = null, ?string $model = null) {
         $this->pdo = $pdo;
         $this->customProvider = $customProvider;
-        $this->model = $model;
+        $this->model = self::resolveModel($pdo, $model);
         $this->apiKey = GeminiAiProvider::resolveApiKey($pdo);
+    }
+
+    /**
+     * Resolves the Gemini model from settings, constants, environment, or default standard.
+     */
+    public static function resolveModel(?PDO $pdo = null, ?string $explicitModel = null): string {
+        if (!empty($explicitModel) && is_string($explicitModel)) {
+            return trim($explicitModel);
+        }
+
+        // 1. Check admin_settings if PDO available
+        if ($pdo instanceof PDO) {
+            try {
+                $stmt = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'pepp_updates_gemini_model' LIMIT 1");
+                $stmt->execute();
+                $val = $stmt->fetchColumn();
+                if (!empty($val) && is_string($val)) {
+                    return trim($val);
+                }
+            } catch (Throwable $e) {
+                // Ignore DB error
+            }
+
+            try {
+                $stmt = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'gemini_model' LIMIT 1");
+                $stmt->execute();
+                $val = $stmt->fetchColumn();
+                if (!empty($val) && is_string($val)) {
+                    return trim($val);
+                }
+            } catch (Throwable $e) {
+                // Ignore DB error
+            }
+        }
+
+        // 2. Application constant
+        if (defined('GEMINI_MODEL')) {
+            $constModel = constant('GEMINI_MODEL');
+            if (!empty($constModel) && is_string($constModel)) {
+                return trim($constModel);
+            }
+        }
+
+        // 3. Environment variable
+        $envModel = getenv('GEMINI_MODEL');
+        if (empty($envModel)) {
+            $envModel = $_ENV['GEMINI_MODEL'] ?? ($_SERVER['GEMINI_MODEL'] ?? null);
+        }
+        if (!empty($envModel) && is_string($envModel)) {
+            return trim($envModel);
+        }
+
+        // 4. Default: gemini-3.8-flash (stable multimodal Flash standard)
+        return 'gemini-3.8-flash';
     }
 
     /**
@@ -151,7 +205,7 @@ PROMPT;
                       "SHORT DESCRIPTION: " . $shortDescription . "\n\n" .
                       "Please inspect the banner image carefully, extract any visible dates, courses, exams, or instructions, and generate the complete HTML full description.";
 
-        // 5. Execute Gemini Multimodal Vision API call
+        // 5. Execute Gemini Multimodal Vision API call with transient retry and 404 fallback
         try {
             $base64Data = base64_encode($imageBytes);
 
@@ -173,49 +227,139 @@ PROMPT;
                     ]
                 ],
                 'generationConfig' => [
-                    'temperature'     => 0.2,
                     'maxOutputTokens' => 2048,
                 ]
             ];
 
-            $url = 'https://generativelanguage.googleapis.com/v1beta/models/' . urlencode($this->model) . ':generateContent';
+            $payloadJson = json_encode($payload, JSON_UNESCAPED_SLASHES);
 
-            $ch = curl_init($url);
-            curl_setopt_array($ch, [
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_POST           => true,
-                CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_SLASHES),
-                CURLOPT_HTTPHEADER     => [
-                    'Content-Type: application/json',
-                    'x-goog-api-key: ' . $this->apiKey
-                ],
-                CURLOPT_TIMEOUT        => 35,
-                CURLOPT_CONNECTTIMEOUT => 10,
-                CURLOPT_SSL_VERIFYPEER => true
-            ]);
-
-            $response = curl_exec($ch);
-            $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            $curlError = (string)curl_error($ch);
-            curl_close($ch);
-
-            if ($curlError !== '') {
-                return [
-                    'success' => false,
-                    'error'   => 'AI service network connection error: ' . htmlspecialchars($curlError)
-                ];
+            // Candidate models: Primary model followed by verified, currently supported Flash fallback candidates
+            $candidateModels = [$this->model];
+            foreach (['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite'] as $fb) {
+                if (!in_array($fb, $candidateModels, true)) {
+                    $candidateModels[] = $fb;
+                }
             }
 
-            if ($httpCode !== 200 || empty($response)) {
-                $errSnippet = is_string($response) ? substr($response, 0, 250) : '';
+            $lastHttpCode = 0;
+            $lastSafeCategory = 'Unknown Error';
+            $lastErrSnippet = '';
+            $successfulResponse = null;
+            $successfulModel = null;
+
+            foreach ($candidateModels as $candidateModel) {
+                $url = 'https://generativelanguage.googleapis.com/v1beta/models/' . urlencode($candidateModel) . ':generateContent';
+
+                $maxAttempts = 3;
+                $retryDelays = [1 => 2, 2 => 4];
+                $response = null;
+                $httpCode = 0;
+                $curlError = '';
+
+                for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+                    $ch = curl_init($url);
+                    curl_setopt_array($ch, [
+                        CURLOPT_RETURNTRANSFER => true,
+                        CURLOPT_POST           => true,
+                        CURLOPT_POSTFIELDS     => $payloadJson,
+                        CURLOPT_HTTPHEADER     => [
+                            'Content-Type: application/json',
+                            'x-goog-api-key: ' . $this->apiKey
+                        ],
+                        CURLOPT_TIMEOUT        => 35,
+                        CURLOPT_CONNECTTIMEOUT => 10,
+                        CURLOPT_SSL_VERIFYPEER => true
+                    ]);
+
+                    $response = curl_exec($ch);
+                    $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                    $curlError = (string)curl_error($ch);
+                    curl_close($ch);
+
+                    if ($httpCode === 200 && !empty($response)) {
+                        break;
+                    }
+
+                    // Retry ONLY on transient HTTP status codes (503 Service Unavailable, 429 Too Many Requests)
+                    $isTransient = ($httpCode === 503 || $httpCode === 429);
+                    if ($isTransient && $attempt < $maxAttempts) {
+                        $sleepSec = $retryDelays[$attempt] ?? 2;
+                        sleep($sleepSec);
+                        continue;
+                    }
+
+                    break;
+                }
+
+                if ($curlError !== '') {
+                    return [
+                        'success' => false,
+                        'error'   => 'AI service network connection error: ' . htmlspecialchars($curlError)
+                    ];
+                }
+
+                if ($httpCode === 200 && !empty($response)) {
+                    $successfulResponse = $response;
+                    $successfulModel = $candidateModel;
+                    break;
+                }
+
+                $lastHttpCode = $httpCode;
+
+                // Safe diagnostic error categorization
+                $errJson = json_decode(is_string($response) ? $response : '', true);
+                $apiError = $errJson['error'] ?? null;
+                $apiStatus = is_array($apiError) ? ($apiError['status'] ?? '') : '';
+                $apiMsg = is_array($apiError) ? ($apiError['message'] ?? '') : '';
+
+                if ($httpCode === 401 || $apiStatus === 'UNAUTHENTICATED') {
+                    $safeCategory = 'Invalid / Unauthenticated API Key';
+                } elseif ($httpCode === 403 || $apiStatus === 'PERMISSION_DENIED') {
+                    $safeCategory = 'Project / Model Access Restricted or Permission Denied';
+                } elseif ($httpCode === 404 || $apiStatus === 'NOT_FOUND') {
+                    $safeCategory = 'Model Unavailable or Not Supported';
+                } elseif ($httpCode === 429 || $apiStatus === 'RESOURCE_EXHAUSTED') {
+                    $safeCategory = 'Quota / Rate Limit Exceeded';
+                } elseif ($httpCode === 500 || $apiStatus === 'INTERNAL') {
+                    $safeCategory = 'Google AI Internal Server Error';
+                } elseif ($httpCode === 503 || $apiStatus === 'UNAVAILABLE') {
+                    $safeCategory = 'Google AI Service Unavailable';
+                } elseif ($httpCode === 400 || $apiStatus === 'INVALID_ARGUMENT') {
+                    $safeCategory = 'Invalid Request Arguments';
+                } else {
+                    $safeCategory = 'API Error (HTTP ' . $httpCode . ')';
+                }
+
+                $lastSafeCategory = $safeCategory;
+
+                $errSnippet = !empty($apiMsg) ? $apiMsg : (is_string($response) ? substr($response, 0, 200) : '');
                 $errSnippet = preg_replace('/AIza[0-9A-Za-z_-]{20,}/', '[REDACTED]', $errSnippet);
+                $errSnippet = preg_replace('/https?:\/\/[^\s]+/i', '[URL]', $errSnippet);
+                $lastErrSnippet = trim($errSnippet);
+
+                // If HTTP 404 (Model Not Found or Unavailable to project/API version), try next candidate model
+                if ($httpCode === 404) {
+                    continue;
+                }
+
+                // For other non-transient errors (e.g. 400, 401, 403), stop immediately with clear diagnostic
+                break;
+            }
+
+            if ($successfulResponse === null) {
+                $errDiagnostic = "AI service error [Category: {$lastSafeCategory}] (HTTP {$lastHttpCode})";
+                if ($lastHttpCode === 404) {
+                    $errDiagnostic .= " for model(s): " . implode(', ', $candidateModels) . ". The model may be unavailable or restricted for your Google project API key.";
+                } elseif ($lastErrSnippet !== '') {
+                    $errDiagnostic .= ": " . htmlspecialchars($lastErrSnippet);
+                }
                 return [
                     'success' => false,
-                    'error'   => 'AI service returned error (HTTP ' . $httpCode . '): ' . htmlspecialchars($errSnippet)
+                    'error'   => $errDiagnostic
                 ];
             }
 
-            $resJson = json_decode($response, true);
+            $resJson = json_decode($successfulResponse, true);
             $candidateText = $resJson['candidates'][0]['content']['parts'][0]['text'] ?? '';
 
             if (trim($candidateText) === '') {
@@ -243,12 +387,13 @@ PROMPT;
             return [
                 'success'          => true,
                 'full_description' => $sanitizedHtml,
-                'model'            => $this->model
+                'model'            => $successfulModel ?? $this->model
             ];
         } catch (Throwable $e) {
+            $msg = preg_replace('/AIza[0-9A-Za-z_-]{20,}/', '[REDACTED]', $e->getMessage());
             return [
                 'success' => false,
-                'error'   => 'AI generation failure: ' . htmlspecialchars($e->getMessage())
+                'error'   => 'AI generation failure: ' . htmlspecialchars($msg)
             ];
         }
     }

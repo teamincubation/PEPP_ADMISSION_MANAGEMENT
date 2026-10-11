@@ -138,6 +138,9 @@ assert_test("R3.18: pepp_public_sanitize_html preserves safe color styles on pub
 assert_test("R3.19: style.css defines .ql-align-center, .ql-align-right, .ql-align-justify", strpos($styleCssContent, '.ql-align-center') !== false && strpos($styleCssContent, '.ql-align-justify') !== false);
 assert_test("R3.20: style.css defines .ql-size-small, .ql-size-large, .ql-size-huge", strpos($styleCssContent, '.ql-size-small') !== false && strpos($styleCssContent, '.ql-size-huge') !== false);
 assert_test("R3.21: style.css defines .ql-font-serif and .ql-font-monospace", strpos($styleCssContent, '.ql-font-serif') !== false && strpos($styleCssContent, '.ql-font-monospace') !== false);
+assert_test("R3.22: Container panels have overflow: visible !important to prevent dropdown clipping", strpos($postsPhpContent, '.panel:has(.quill-editor-container)') !== false && strpos($postsPhpContent, 'overflow: visible !important') !== false);
+assert_test("R3.23: Alignment icon picker renders as horizontal flex row with styled 18px SVG items", strpos($postsPhpContent, '.ql-picker.ql-align.ql-expanded .ql-picker-options') !== false && strpos($postsPhpContent, 'flex-direction: row') !== false);
+assert_test("R3.24: Post-init JavaScript populates data-label attributes on Heading, Size, and Font picker items", strpos($postsPhpContent, "el.setAttribute('data-label', 'Heading 1')") !== false && strpos($postsPhpContent, "el.setAttribute('data-label', 'Normal Size')") !== false);
 
 // ─────────────────────────────────────────────────────────────
 // REQUIREMENT 4: AI DESCRIPTION GENERATION
@@ -198,6 +201,23 @@ assert_test("R4.17: AJAX endpoint action 'ai_generate_description' verifies CSRF
 assert_test("R4.18: AJAX endpoint validates banner image path traversal safety", strpos($postsPhpContent, 'strpos($existing_banner, \'..\') !== false') !== false);
 assert_test("R4.19: AJAX endpoint enforces 5MB banner file size limit", strpos($postsPhpContent, '5 * 1024 * 1024') !== false);
 assert_test("R4.20: AJAX endpoint enforces image MIME validation", strpos($postsPhpContent, "['image/jpeg', 'image/png', 'image/webp']") !== false);
+
+// Model resolution and defaults
+assert_test("R4.21: PeppUpdatesAiService defaults model to 'gemini-3.8-flash' (stable multimodal Flash standard)", $aiServiceUnconfigured->getModelName() === 'gemini-3.8-flash');
+
+$dbMockPdo = new PDO('sqlite::memory:');
+$dbMockPdo->exec("CREATE TABLE admin_settings (setting_name VARCHAR(100) PRIMARY KEY, setting_value TEXT)");
+$stmt = $dbMockPdo->prepare("INSERT INTO admin_settings (setting_name, setting_value) VALUES ('pepp_updates_gemini_model', 'custom-pepp-model')");
+$stmt->execute();
+$aiServiceDbConfigured = new PeppUpdatesAiService($dbMockPdo);
+assert_test("R4.22: PeppUpdatesAiService resolves model from database admin_settings (pepp_updates_gemini_model)", $aiServiceDbConfigured->getModelName() === 'custom-pepp-model');
+
+putenv("GEMINI_MODEL=env-resolved-model");
+assert_test("R4.23: PeppUpdatesAiService resolves model from GEMINI_MODEL environment variable", PeppUpdatesAiService::resolveModel() === 'env-resolved-model');
+putenv("GEMINI_MODEL"); // clear env
+
+$aiServiceExplicit = new PeppUpdatesAiService($mockPdo, null, 'explicit-test-model');
+assert_test("R4.24: PeppUpdatesAiService constructor accepts explicit model override", $aiServiceExplicit->getModelName() === 'explicit-test-model');
 
 echo "\n============================================================\n";
 echo "ENHANCEMENTS AUDIT SUMMARY: {$totalPass} PASSED, {$totalFail} FAILED\n";
