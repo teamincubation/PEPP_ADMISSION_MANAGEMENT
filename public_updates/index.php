@@ -1,6 +1,6 @@
 <?php
 /**
- * PEPP Updates Public Portal — Homepage
+ * PEPP Updates Public Portal - Homepage
  *
  * Displays hero search, active category chips, paginated latest updates grid,
  * category showcase, and WhatsApp updates subscription CTA.
@@ -30,7 +30,7 @@ $categories = pepp_public_get_categories($pdo);
 
 // Page SEO & JSON-LD
 $pageSeo = [
-    'title'       => 'PEPP Updates — Career, Exam & Admission Notifications',
+    'title'       => 'PEPP Updates - Career, Exam & Admission Notifications',
     'description' => 'Stay ahead with official PEPP Learning entrance exam alerts, admission notifications, psychology updates, and career opportunities.',
     'canonical'   => pepp_seo_get_base_url() . '/',
     'og_type'     => 'website',

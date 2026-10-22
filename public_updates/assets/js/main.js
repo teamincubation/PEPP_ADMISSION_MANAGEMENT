@@ -1,5 +1,5 @@
 /**
- * PEPP Updates Public Portal — Lightweight JavaScript
+ * PEPP Updates Public Portal - Lightweight JavaScript
  * Zero external dependencies. Accessible, fast, mobile-friendly.
  */
 document.addEventListener('DOMContentLoaded', function() {

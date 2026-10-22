@@ -1,6 +1,6 @@
 <?php
 /**
- * PEPP Updates — Delivery Campaigns Management
+ * PEPP Updates - Delivery Campaigns Management
  * 
  * Manage and prepare WhatsApp broadcast campaigns for updates.
  * 
@@ -16,7 +16,7 @@ require_once 'includes/auth.php';
 require_permission('pepp-updates');
 require_once 'includes/pepp_updates_helper.php';
 
-$page_title = 'PEPP Updates — Delivery Campaigns';
+$page_title = 'PEPP Updates - Delivery Campaigns';
 $page_sub = 'Prepare and schedule WhatsApp broadcast campaigns exclusively on Account 3 (+91 79943 04400)';
 $active_page = 'pepp-updates-campaigns';
 

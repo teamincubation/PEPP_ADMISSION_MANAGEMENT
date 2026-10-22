@@ -1,6 +1,6 @@
 <?php
 /**
- * PEPP Updates — Category Management
+ * PEPP Updates - Category Management
  * 
  * Create, edit, toggle active status, reorder, search, and safely delete categories.
  * Enforces database ON DELETE RESTRICT protection when category is in use by posts.
@@ -10,7 +10,7 @@ require_once 'includes/auth.php';
 require_permission('pepp-updates');
 require_once 'includes/pepp_updates_helper.php';
 
-$page_title = 'PEPP Updates — Categories';
+$page_title = 'PEPP Updates - Categories';
 $page_sub = 'Manage update categories, display ordering, and subscriber notification topics';
 $active_page = 'pepp-updates-categories';
 

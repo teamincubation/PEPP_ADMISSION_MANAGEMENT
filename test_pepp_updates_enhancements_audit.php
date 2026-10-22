@@ -219,6 +219,193 @@ putenv("GEMINI_MODEL"); // clear env
 $aiServiceExplicit = new PeppUpdatesAiService($mockPdo, null, 'explicit-test-model');
 assert_test("R4.24: PeppUpdatesAiService constructor accepts explicit model override", $aiServiceExplicit->getModelName() === 'explicit-test-model');
 
+// ─────────────────────────────────────────────────────────────
+// PRODUCTION BUG FIX AUDIT: ISSUE 1 (AI TIMEOUT & NETWORK ROBUSTNESS)
+// ─────────────────────────────────────────────────────────────
+echo "\n--- Production Bug Fix: Issue 1 (AI Timeout & Network Optimization) ---\n";
+
+assert_test("Fix 1.1: PeppUpdatesAiService resolves default request timeout (50s)", PeppUpdatesAiService::resolveTimeout() === 50);
+assert_test("Fix 1.2: PeppUpdatesAiService resolves default connect timeout (10s)", PeppUpdatesAiService::resolveConnectTimeout() === 10);
+
+// Configurable timeout via database
+$stmtTimeout = $dbMockPdo->prepare("INSERT INTO admin_settings (setting_name, setting_value) VALUES ('pepp_updates_ai_timeout', '45')");
+$stmtTimeout->execute();
+assert_test("Fix 1.3: PeppUpdatesAiService resolves timeout from admin_settings", PeppUpdatesAiService::resolveTimeout($dbMockPdo) === 45);
+
+// Configurable timeout via ENV
+putenv("PEPP_UPDATES_AI_TIMEOUT=42");
+assert_test("Fix 1.4: PeppUpdatesAiService resolves timeout from PEPP_UPDATES_AI_TIMEOUT env", PeppUpdatesAiService::resolveTimeout() === 42);
+putenv("PEPP_UPDATES_AI_TIMEOUT"); // clear
+
+$aiServiceSource = file_get_contents(__DIR__ . '/includes/ai/PeppUpdatesAiService.php');
+assert_test("Fix 1.5: PeppUpdatesAiService sets Expect: header to prevent 100-continue handshake delay", strpos($aiServiceSource, "'Expect:'") !== false);
+assert_test("Fix 1.6: PeppUpdatesAiService implements optimizeBannerForVision() method", method_exists(PeppUpdatesAiService::class, 'optimizeBannerForVision'));
+assert_test("Fix 1.7: PeppUpdatesAiService bounds transient retry to max 2 attempts", strpos($aiServiceSource, '$maxAttempts = 2') !== false);
+assert_test("Fix 1.8: PeppUpdatesAiService retries ONLY on transient 503 or 429", strpos($aiServiceSource, '$isTransient = ($httpCode === 503 || $httpCode === 429);') !== false);
+assert_test("Fix 1.9: PeppUpdatesAiService does NOT retry long timeouts to avoid duplicate operations", strpos($aiServiceSource, '$curlErrNo === 28') !== false && strpos($aiServiceSource, 'Never retry on timeouts') !== false);
+assert_test("Fix 1.10: Frontend fetch in pepp-updates-posts.php uses AbortController with 65s timeout", strpos($postsPhpContent, 'AbortController') !== false && strpos($postsPhpContent, '65000') !== false);
+assert_test("Fix 1.11: Frontend AI error alert wraps in setTimeout to avoid freezing DOM button reset", (bool)preg_match('/setTimeout\(function\(\)\s*\{\s*alert\(/', $postsPhpContent));
+
+// ─────────────────────────────────────────────────────────────
+// PRODUCTION BUG FIX AUDIT: ISSUE 2 (QUILL NATIVE SELECT OVERRIDE FIX)
+// ─────────────────────────────────────────────────────────────
+echo "\n--- Production Bug Fix: Issue 2 (Quill Native Select Override Fix) ---\n";
+
+assert_test("Fix 2.1: pepp-updates-posts.php hides raw select elements in toolbar with !important", strpos($postsPhpContent, '.ql-toolbar select') !== false && strpos($postsPhpContent, 'display: none !important') !== false);
+assert_test("Fix 2.2: Scoped rule targets .quill-editor-container select and #quillEditor select", strpos($postsPhpContent, '.quill-editor-container select') !== false && strpos($postsPhpContent, '#quillEditor select') !== false);
+assert_test("Fix 2.3: Quill picker elements forced inline-block with !important", strpos($postsPhpContent, '.ql-snow .ql-picker') !== false && strpos($postsPhpContent, 'display: inline-block !important') !== false);
+assert_test("Fix 2.4: Expanded picker options forced block with !important", strpos($postsPhpContent, '.ql-snow .ql-picker.ql-expanded .ql-picker-options') !== false && strpos($postsPhpContent, 'display: block !important') !== false);
+
+// ─────────────────────────────────────────────────────────────
+// PRODUCTION BUG FIX AUDIT: ISSUE 3 (EM DASH ELIMINATION & NORMALIZATION)
+// ─────────────────────────────────────────────────────────────
+echo "\n--- Production Bug Fix: Issue 3 (Em Dash Elimination & Normalization) ---\n";
+
+$scopedUiFiles = [
+    'pepp-updates.php',
+    'pepp-updates-posts.php',
+    'pepp-updates-categories.php',
+    'pepp-updates-keywords.php',
+    'pepp-updates-subscribers.php',
+    'pepp-updates-campaigns.php',
+    'pepp-updates-settings.php',
+    'public_updates/404.php',
+    'public_updates/500.php',
+    'public_updates/categories.php',
+    'public_updates/category.php',
+    'public_updates/index.php',
+    'public_updates/privacy.php',
+    'public_updates/search.php',
+    'public_updates/sitemap.php',
+    'public_updates/subscribe.php',
+    'public_updates/terms.php',
+    'public_updates/track.php',
+    'public_updates/update.php',
+    'public_updates/includes/bootstrap.php',
+    'public_updates/includes/database.php',
+    'public_updates/includes/footer.php',
+    'public_updates/includes/header.php',
+    'public_updates/includes/seo.php',
+    'public_updates/assets/js/main.js',
+    'public_updates/assets/css/style.css'
+];
+
+$allScopedClean = true;
+$failingFiles = [];
+foreach ($scopedUiFiles as $relPath) {
+    $fullPath = __DIR__ . '/' . $relPath;
+    if (!file_exists($fullPath)) continue;
+    $fc = file_get_contents($fullPath);
+    if (strpos($fc, "\xE2\x80\x94") !== false) {
+        $allScopedClean = false;
+        $failingFiles[] = $relPath;
+    }
+}
+assert_test("Fix 3.1: Zero literal em dashes in static PEPP Updates source and templates (" . count($scopedUiFiles) . " files)", $allScopedClean, implode(', ', $failingFiles));
+
+// Test HTML sanitizer normalization (admin and public)
+$rawEmdashText = "Date: 15 Oct \xE2\x80\x94 20 Oct &mdash; 2027";
+$sanitizedAdmin = pepp_updates_sanitize_html("<p>{$rawEmdashText}</p>");
+assert_test("Fix 3.2: pepp_updates_sanitize_html normalizes em dash and &mdash; to hyphens", strpos($sanitizedAdmin, "\xE2\x80\x94") === false && strpos($sanitizedAdmin, '&mdash;') === false && strpos($sanitizedAdmin, '15 Oct - 20 Oct - 2027') !== false);
+
+$sanitizedPublic = pepp_public_sanitize_html("<p>{$rawEmdashText}</p>");
+assert_test("Fix 3.3: pepp_public_sanitize_html normalizes em dash and &mdash; to hyphens", strpos($sanitizedPublic, "\xE2\x80\x94") === false && strpos($sanitizedPublic, '&mdash;') === false && strpos($sanitizedPublic, '15 Oct - 20 Oct - 2027') !== false);
+
+// Test plain text sanitize normalization
+$plainEmdashText = "Plain \xE2\x80\x94 Text";
+$cleanPlain = pepp_updates_sanitize_html($plainEmdashText);
+assert_test("Fix 3.4: pepp_updates_sanitize_html normalizes plain text em dashes", strpos($cleanPlain, "\xE2\x80\x94") === false && strpos($cleanPlain, 'Plain - Text') !== false);
+
+// Test SEO text cleaning normalization
+require_once __DIR__ . '/public_updates/includes/seo.php';
+$seoCleaned = pepp_seo_clean_text("SEO Title \xE2\x80\x94 Official Update &mdash; 2027");
+assert_test("Fix 3.5: pepp_seo_clean_text normalizes em dash and &mdash; to hyphens", strpos($seoCleaned, "\xE2\x80\x94") === false && strpos($seoCleaned, '&mdash;') === false && strpos($seoCleaned, 'SEO Title - Official Update - 2027') !== false);
+
+// Test AI Service em dash normalization
+$mockProviderWithEmdash = new class {
+    public function generateContentRaw($prompt, $params = []) {
+        return "<h2>Schedule \xE2\x80\x94 2027</h2><p>Registration window: May \xE2\x80\x94 June &mdash; Details</p>";
+    }
+};
+$aiServiceEmdash = new PeppUpdatesAiService($mockPdo, $mockProviderWithEmdash);
+$aiRes = $aiServiceEmdash->generateDescription("Title \xE2\x80\x94 Test", "Short \xE2\x80\x94 Desc", 'image/jpeg', 'fake_bytes');
+assert_test("Fix 3.6: PeppUpdatesAiService normalizes em dashes in generated HTML output", $aiRes['success'] && strpos($aiRes['full_description'], "\xE2\x80\x94") === false && strpos($aiRes['full_description'], '&mdash;') === false && strpos($aiRes['full_description'], 'Schedule - 2027') !== false);
+
+// Test dynamic post display normalization without mutating DB
+$pubTestPdo = new PDO('sqlite::memory:');
+$pubTestPdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+$pubTestPdo->exec("CREATE TABLE updates_posts (
+    id INTEGER PRIMARY KEY,
+    title TEXT,
+    slug TEXT,
+    short_description TEXT,
+    full_description TEXT,
+    status TEXT,
+    publish_at TEXT,
+    expires_at TEXT,
+    banner_image TEXT,
+    created_at TEXT,
+    updated_at TEXT
+)");
+$pubTestPdo->exec("CREATE TABLE updates_visits (
+    id INTEGER PRIMARY KEY,
+    post_id INTEGER,
+    ip_hash TEXT,
+    visit_date TEXT,
+    created_at TEXT
+)");
+$pubTestPdo->exec("CREATE TABLE updates_categories (
+    id INTEGER PRIMARY KEY,
+    name TEXT,
+    slug TEXT,
+    description TEXT,
+    display_order INTEGER,
+    is_active INTEGER
+)");
+$pubTestPdo->exec("CREATE TABLE updates_post_categories (post_id INTEGER, category_id INTEGER)");
+$pubTestPdo->exec("CREATE TABLE updates_keywords (id INTEGER PRIMARY KEY, keyword TEXT, category_id INTEGER)");
+$pubTestPdo->exec("CREATE TABLE updates_post_keywords (post_id INTEGER, keyword_id INTEGER)");
+$pubTestPdo->exec("CREATE TABLE updates_settings (setting_key TEXT PRIMARY KEY, setting_value TEXT, updated_at TEXT)");
+
+$pubTestPdo->exec("INSERT INTO updates_posts (id, title, slug, short_description, full_description, status, publish_at)
+VALUES (1, 'CUET PG \xE2\x80\x94 2027 Notification', 'cuet-pg-2027', 'Registration dates \xE2\x80\x94 May to June', '<p>Full content</p>', 'published', datetime('now', '-1 day'))");
+
+$retrievedPost = pepp_public_get_post_by_slug($pubTestPdo, 'cuet-pg-2027');
+assert_test("Fix 3.7: pepp_public_get_post_by_slug normalizes em dash in title at display time", strpos($retrievedPost['title'], "\xE2\x80\x94") === false && strpos($retrievedPost['title'], 'CUET PG - 2027 Notification') !== false);
+assert_test("Fix 3.8: pepp_public_get_post_by_slug normalizes em dash in short_description at display time", strpos($retrievedPost['short_description'], "\xE2\x80\x94") === false && strpos($retrievedPost['short_description'], 'Registration dates - May to June') !== false);
+
+$retrievedPostsList = pepp_public_get_posts($pubTestPdo);
+assert_test("Fix 3.9: pepp_public_get_posts normalizes em dash in post listing at display time", strpos($retrievedPostsList['posts'][0]['title'], "\xE2\x80\x94") === false && strpos($retrievedPostsList['posts'][0]['title'], 'CUET PG - 2027 Notification') !== false);
+
+// Check that DB record remains unmutated (preserves safety rule: no DB mutations)
+$rawDbRow = $pubTestPdo->query("SELECT title FROM updates_posts WHERE id = 1")->fetch(PDO::FETCH_ASSOC);
+assert_test("Fix 3.10: Database record remains unchanged (display-time normalization does NOT mutate DB)", strpos($rawDbRow['title'], "\xE2\x80\x94") !== false);
+
+// Test preservation of en-dashes (–) and regular hyphens (-)
+$enDashText = "Pages 10\xE2\x80\x9320 &ndash; Standard-Hyphen";
+$enDashAdmin = pepp_updates_sanitize_html("<p>{$enDashText}</p>");
+$enDashPublic = pepp_public_sanitize_html("<p>{$enDashText}</p>");
+$enDashSeo = pepp_seo_clean_text($enDashText);
+assert_test("Fix 3.11: Sanitizers and SEO helpers strictly PRESERVE en dashes (–) and hyphens (-)",
+    strpos($enDashAdmin, "\xE2\x80\x93") !== false && strpos($enDashAdmin, "Standard-Hyphen") !== false &&
+    strpos($enDashPublic, "\xE2\x80\x93") !== false && strpos($enDashPublic, "Standard-Hyphen") !== false &&
+    strpos($enDashSeo, "\xE2\x80\x93") !== false && strpos($enDashSeo, "Standard-Hyphen") !== false
+);
+
+// Test related posts normalization
+$pubTestPdo->exec("INSERT INTO updates_post_categories (post_id, category_id) VALUES (1, 1)");
+$pubTestPdo->exec("INSERT INTO updates_posts (id, title, slug, short_description, full_description, status, publish_at)
+VALUES (2, 'Related \xE2\x80\x94 Exam Update', 'related-exam', 'Related \xE2\x80\x94 Brief', '<p>Related content</p>', 'published', datetime('now', '-2 days'))");
+$pubTestPdo->exec("INSERT INTO updates_post_categories (post_id, category_id) VALUES (2, 1)");
+$relatedPosts = pepp_public_get_related_posts($pubTestPdo, 1, [1]);
+assert_test("Fix 3.12: pepp_public_get_related_posts normalizes em dash at display time",
+    !empty($relatedPosts) &&
+    strpos($relatedPosts[0]['title'], "\xE2\x80\x94") === false &&
+    strpos($relatedPosts[0]['title'], 'Related - Exam Update') !== false &&
+    strpos($relatedPosts[0]['short_description'], "\xE2\x80\x94") === false &&
+    strpos($relatedPosts[0]['short_description'], 'Related - Brief') !== false
+);
+
 echo "\n============================================================\n";
 echo "ENHANCEMENTS AUDIT SUMMARY: {$totalPass} PASSED, {$totalFail} FAILED\n";
 echo "============================================================\n";

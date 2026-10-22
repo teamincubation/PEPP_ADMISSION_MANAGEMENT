@@ -1,6 +1,6 @@
 <?php
 /**
- * PEPP Updates Public Portal — Core Helper Functions
+ * PEPP Updates Public Portal - Core Helper Functions
  *
  * Implements read-only queries, safe HTML sanitization, runtime lifecycle logic,
  * NEW label duration calculations, privacy-conscious hashed visit counting,
@@ -198,7 +198,8 @@ function pepp_public_sanitize_html(?string $html): string {
     }
 
     if (!class_exists('DOMDocument')) {
-        return htmlspecialchars($html);
+        $plain = str_replace(["\xE2\x80\x94", '&mdash;', '&#8212;', '&#x2014;'], '-', $html);
+        return htmlspecialchars($plain);
     }
 
     $dom = new DOMDocument();
@@ -210,7 +211,8 @@ function pepp_public_sanitize_html(?string $html): string {
 
     $root = $dom->getElementById('__pepp_root__');
     if (!$root) {
-        return htmlspecialchars(strip_tags($html));
+        $plain = str_replace(["\xE2\x80\x94", '&mdash;', '&#8212;', '&#x2014;'], '-', $html);
+        return htmlspecialchars(strip_tags($plain));
     }
 
     $allowedTags = [
@@ -321,6 +323,7 @@ function pepp_public_sanitize_html(?string $html): string {
     foreach ($root->childNodes as $child) {
         $result .= $dom->saveHTML($child);
     }
+    $result = str_replace(["\xE2\x80\x94", '&mdash;', '&#8212;', '&#x2014;'], '-', $result);
     return trim($result);
 }
 
@@ -570,6 +573,12 @@ function pepp_public_get_posts(PDO $pdo, array $options = []): array {
 
     $newDuration = pepp_public_get_new_duration($pdo);
     foreach ($posts as &$post) {
+        if (isset($post['title'])) {
+            $post['title'] = str_replace(["\xE2\x80\x94", '&mdash;', '&#8212;', '&#x2014;'], '-', $post['title']);
+        }
+        if (isset($post['short_description'])) {
+            $post['short_description'] = str_replace(["\xE2\x80\x94", '&mdash;', '&#8212;', '&#x2014;'], '-', $post['short_description']);
+        }
         $calc = pepp_public_calculate_status($post, $newDuration);
         $post['is_expired']     = $calc['is_expired'];
         $post['is_new']         = $calc['is_new'];
@@ -634,6 +643,13 @@ function pepp_public_get_post_by_slug(PDO $pdo, string $slug): ?array {
     ");
     $stmtKws->execute([$post['id']]);
     $post['keywords'] = $stmtKws->fetchAll(PDO::FETCH_ASSOC);
+
+    if (isset($post['title'])) {
+        $post['title'] = str_replace(["\xE2\x80\x94", '&mdash;', '&#8212;', '&#x2014;'], '-', $post['title']);
+    }
+    if (isset($post['short_description'])) {
+        $post['short_description'] = str_replace(["\xE2\x80\x94", '&mdash;', '&#8212;', '&#x2014;'], '-', $post['short_description']);
+    }
 
     // Calculate runtime status
     $newDuration = pepp_public_get_new_duration($pdo);
@@ -725,6 +741,12 @@ function pepp_public_get_related_posts(PDO $pdo, int $currentPostId, array $cate
 
     $newDuration = pepp_public_get_new_duration($pdo);
     foreach ($posts as &$post) {
+        if (isset($post['title'])) {
+            $post['title'] = str_replace(["\xE2\x80\x94", '&mdash;', '&#8212;', '&#x2014;'], '-', $post['title']);
+        }
+        if (isset($post['short_description'])) {
+            $post['short_description'] = str_replace(["\xE2\x80\x94", '&mdash;', '&#8212;', '&#x2014;'], '-', $post['short_description']);
+        }
         $calc = pepp_public_calculate_status($post, $newDuration);
         $post['is_expired'] = $calc['is_expired'];
         $post['is_new']     = $calc['is_new'];

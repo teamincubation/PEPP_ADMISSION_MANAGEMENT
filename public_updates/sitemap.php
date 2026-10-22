@@ -1,6 +1,6 @@
 <?php
 /**
- * PEPP Updates Public Portal — Dynamic XML Sitemap
+ * PEPP Updates Public Portal - Dynamic XML Sitemap
  *
  * Route: /sitemap.xml or /sitemap.php
  *

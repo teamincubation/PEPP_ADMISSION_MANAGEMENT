@@ -1,6 +1,6 @@
 <?php
 /**
- * PEPP Updates Public Portal — Footer Component
+ * PEPP Updates Public Portal - Footer Component
  */
 
 if (!defined('PEPP_PUBLIC_UPDATES_PORTAL')) {

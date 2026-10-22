@@ -1,5 +1,5 @@
 /**
- * PEPP Updates — Public Portal Modern CSS Design System
+ * PEPP Updates - Public Portal Modern CSS Design System
  * 
  * Mobile-First, Highly Responsive, Accessible, Lightweight (Zero Frameworks).
  */
@@ -889,7 +889,7 @@ main {
     margin: 1.5rem 0;
 }
 
-/* Table Containment — Safe horizontal scroll on mobile */
+/* Table Containment - Safe horizontal scroll on mobile */
 .rich-content table {
     width: 100%;
     border-collapse: collapse;

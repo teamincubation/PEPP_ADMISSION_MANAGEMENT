@@ -1,6 +1,6 @@
 <?php
 /**
- * PEPP Updates — Keyword Management
+ * PEPP Updates - Keyword Management
  * 
  * Category-owned keywords. Each keyword belongs to a specific category.
  * Enforces per-category uniqueness (same keyword can exist in multiple categories).
@@ -10,7 +10,7 @@ require_once 'includes/auth.php';
 require_permission('pepp-updates');
 require_once 'includes/pepp_updates_helper.php';
 
-$page_title = 'PEPP Updates — Keywords';
+$page_title = 'PEPP Updates - Keywords';
 $page_sub = 'Manage category-scoped tags for precise update categorization and search filtering';
 $active_page = 'pepp-updates-keywords';
 

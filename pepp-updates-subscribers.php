@@ -1,6 +1,6 @@
 <?php
 /**
- * PEPP Updates — Subscribers Admin Management
+ * PEPP Updates - Subscribers Admin Management
  * 
  * View and manage opted-in WhatsApp subscribers, followed categories,
  * and immutable consent & lifecycle events.
@@ -17,7 +17,7 @@ require_once 'includes/auth.php';
 require_permission('pepp-updates');
 require_once 'includes/pepp_updates_helper.php';
 
-$page_title = 'PEPP Updates — Subscribers';
+$page_title = 'PEPP Updates - Subscribers';
 $page_sub = 'Manage WhatsApp update subscribers, category subscriptions, and consent event audit trail';
 $active_page = 'pepp-updates-subscribers';
 
@@ -378,7 +378,7 @@ include 'includes/admin_nav.php';
                                 </td>
                                 <td>
                                     <span class="cell-sub">
-                                        <?php echo !empty($s['stopped_at']) ? date('d M Y', strtotime($s['stopped_at'])) : '—'; ?>
+                                        <?php echo !empty($s['stopped_at']) ? date('d M Y', strtotime($s['stopped_at'])) : '-'; ?>
                                     </span>
                                 </td>
                                 <td style="text-align: right;">
@@ -561,7 +561,7 @@ function viewSubscriberHistory(id) {
                         '<div>' +
                             '<span class="badge ' + badgeCls + '" style="margin-right: 6px;">' + ev.event_type + '</span>' +
                             '<span style="font-size:0.75rem; color:var(--muted-foreground);">via ' + ev.source + '</span>' +
-                            '<div style="font-size:0.84rem; color:var(--foreground); margin-top:4px;">' + (ev.details || '—') + '</div>' +
+                            '<div style="font-size:0.84rem; color:var(--foreground); margin-top:4px;">' + (ev.details || '-') + '</div>' +
                         '</div>' +
                         '<div style="font-size:0.75rem; color:var(--muted-foreground); white-space:nowrap;">' + ev.created_at + '</div>' +
                     '</div>';

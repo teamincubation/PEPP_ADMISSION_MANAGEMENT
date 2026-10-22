@@ -1,6 +1,6 @@
 <?php
 /**
- * PEPP Updates Public Portal — Update Detail Page
+ * PEPP Updates Public Portal - Update Detail Page
  *
  * Route: /update/{slug} or /update.php?slug={slug}
  */

@@ -1,6 +1,6 @@
 <?php
 /**
- * PEPP Updates Public Portal — All Categories Index
+ * PEPP Updates Public Portal - All Categories Index
  *
  * Route: /categories or /categories.php
  */
@@ -12,7 +12,7 @@ $categories = pepp_public_get_categories($pdo);
 
 // Page SEO
 $pageSeo = [
-    'title'       => 'Categories — PEPP Updates',
+    'title'       => 'Categories - PEPP Updates',
     'description' => 'Explore educational categories including entrance exams, admissions, psychology alerts, and academic notifications from PEPP Learning.',
     'canonical'   => pepp_seo_get_base_url() . '/categories',
     'og_type'     => 'website',

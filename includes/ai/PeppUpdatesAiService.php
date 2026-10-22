@@ -1,6 +1,6 @@
 <?php
 /**
- * PEPP Updates — AI Full Description Generation Service
+ * PEPP Updates - AI Full Description Generation Service
  *
  * Analyzes Title, Short Description, and Banner Image (OCR/Vision) using Gemini AI
  * to generate a comprehensive, structured, factually cautious full description for updates.
@@ -38,28 +38,30 @@ class PeppUpdatesAiService {
             return trim($explicitModel);
         }
 
-        // 1. Check admin_settings if PDO available
+        // 1. Check admin_settings if PDO available (checks both setting_name and setting_key)
         if ($pdo instanceof PDO) {
-            try {
-                $stmt = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'pepp_updates_gemini_model' LIMIT 1");
-                $stmt->execute();
-                $val = $stmt->fetchColumn();
-                if (!empty($val) && is_string($val)) {
-                    return trim($val);
+            foreach (['pepp_updates_gemini_model', 'gemini_model'] as $settingName) {
+                try {
+                    $stmt = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = ? LIMIT 1");
+                    $stmt->execute([$settingName]);
+                    $val = $stmt->fetchColumn();
+                    if (!empty($val) && is_string($val)) {
+                        return trim($val);
+                    }
+                } catch (Throwable $e) {
+                    // Ignore DB error
                 }
-            } catch (Throwable $e) {
-                // Ignore DB error
-            }
 
-            try {
-                $stmt = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'gemini_model' LIMIT 1");
-                $stmt->execute();
-                $val = $stmt->fetchColumn();
-                if (!empty($val) && is_string($val)) {
-                    return trim($val);
+                try {
+                    $stmt = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_key = ? LIMIT 1");
+                    $stmt->execute([$settingName]);
+                    $val = $stmt->fetchColumn();
+                    if (!empty($val) && is_string($val)) {
+                        return trim($val);
+                    }
+                } catch (Throwable $e) {
+                    // Ignore DB error
                 }
-            } catch (Throwable $e) {
-                // Ignore DB error
             }
         }
 
@@ -82,6 +84,153 @@ class PeppUpdatesAiService {
 
         // 4. Default: gemini-3.8-flash (stable multimodal Flash standard)
         return 'gemini-3.8-flash';
+    }
+
+    /**
+     * Resolves the total cURL timeout in seconds from settings, constant, env, or default (50s).
+     */
+    public static function resolveTimeout(?PDO $pdo = null): int {
+        if ($pdo instanceof PDO) {
+            foreach (['pepp_updates_ai_timeout', 'ai_request_timeout'] as $k) {
+                try {
+                    $stmt = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = ? LIMIT 1");
+                    $stmt->execute([$k]);
+                    $v = $stmt->fetchColumn();
+                    if (!empty($v) && is_numeric($v) && (int)$v >= 10 && (int)$v <= 120) {
+                        return (int)$v;
+                    }
+                } catch (Throwable $e) {}
+                try {
+                    $stmt = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_key = ? LIMIT 1");
+                    $stmt->execute([$k]);
+                    $v = $stmt->fetchColumn();
+                    if (!empty($v) && is_numeric($v) && (int)$v >= 10 && (int)$v <= 120) {
+                        return (int)$v;
+                    }
+                } catch (Throwable $e) {}
+            }
+        }
+
+        if (defined('PEPP_UPDATES_AI_TIMEOUT')) {
+            $c = (int)constant('PEPP_UPDATES_AI_TIMEOUT');
+            if ($c >= 10 && $c <= 120) return $c;
+        }
+
+        $env = getenv('PEPP_UPDATES_AI_TIMEOUT');
+        if (empty($env)) {
+            $env = $_ENV['PEPP_UPDATES_AI_TIMEOUT'] ?? ($_SERVER['PEPP_UPDATES_AI_TIMEOUT'] ?? null);
+        }
+        if (!empty($env) && is_numeric($env) && (int)$env >= 10 && (int)$env <= 120) {
+            return (int)$env;
+        }
+
+        return 50; // 50 seconds: generous headroom for multimodal OCR without exceeding host limits
+    }
+
+    /**
+     * Resolves the connect timeout in seconds (default 10s).
+     */
+    public static function resolveConnectTimeout(?PDO $pdo = null): int {
+        if ($pdo instanceof PDO) {
+            try {
+                $stmt = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'pepp_updates_ai_connect_timeout' LIMIT 1");
+                $stmt->execute();
+                $v = $stmt->fetchColumn();
+                if (!empty($v) && is_numeric($v) && (int)$v >= 3 && (int)$v <= 30) {
+                    return (int)$v;
+                }
+            } catch (Throwable $e) {}
+        }
+
+        if (defined('PEPP_UPDATES_AI_CONNECT_TIMEOUT')) {
+            $c = (int)constant('PEPP_UPDATES_AI_CONNECT_TIMEOUT');
+            if ($c >= 3 && $c <= 30) return $c;
+        }
+
+        $env = getenv('PEPP_UPDATES_AI_CONNECT_TIMEOUT');
+        if (!empty($env) && is_numeric($env) && (int)$env >= 3 && (int)$env <= 30) {
+            return (int)$env;
+        }
+
+        return 10;
+    }
+
+    /**
+     * Optimizes high-resolution banner images for AI Vision analysis.
+     * Reduces upload bandwidth and latency while maintaining full OCR readability.
+     */
+    private static function optimizeBannerForVision(string $imageBytes, string $imageMime): array {
+        if (!extension_loaded('gd') || !function_exists('imagecreatefromstring')) {
+            return ['bytes' => $imageBytes, 'mime' => $imageMime];
+        }
+
+        // If file is already compact (<= 800 KB), no downscaling needed
+        if (strlen($imageBytes) <= 800 * 1024) {
+            return ['bytes' => $imageBytes, 'mime' => $imageMime];
+        }
+
+        try {
+            $img = @imagecreatefromstring($imageBytes);
+            if (!$img) {
+                return ['bytes' => $imageBytes, 'mime' => $imageMime];
+            }
+
+            // Correct EXIF orientation if available (e.g. smartphone camera JPEG photos)
+            if (function_exists('exif_read_data') && function_exists('imagerotate') && stripos($imageMime, 'jpeg') !== false) {
+                try {
+                    $exif = @exif_read_data('data://image/jpeg;base64,' . base64_encode(substr($imageBytes, 0, 65536)));
+                    $orientation = (int)($exif['Orientation'] ?? 1);
+                    if ($orientation === 3) {
+                        $rotated = @imagerotate($img, 180, 0);
+                        if ($rotated) { imagedestroy($img); $img = $rotated; }
+                    } elseif ($orientation === 6) {
+                        $rotated = @imagerotate($img, -90, 0);
+                        if ($rotated) { imagedestroy($img); $img = $rotated; }
+                    } elseif ($orientation === 8) {
+                        $rotated = @imagerotate($img, 90, 0);
+                        if ($rotated) { imagedestroy($img); $img = $rotated; }
+                    }
+                } catch (Throwable $e) {}
+            }
+
+            $w = imagesx($img);
+            $h = imagesy($img);
+            $maxDim = 1600;
+
+            if ($w > $maxDim || $h > $maxDim) {
+                $scale = min($maxDim / $w, $maxDim / $h);
+                $newW = (int)round($w * $scale);
+                $newH = (int)round($h * $scale);
+
+                $resized = imagecreatetruecolor($newW, $newH);
+                $white = imagecolorallocate($resized, 255, 255, 255);
+                imagefilledrectangle($resized, 0, 0, $newW, $newH, $white);
+                imagecopyresampled($resized, $img, 0, 0, 0, 0, $newW, $newH, $w, $h);
+                imagedestroy($img);
+                $img = $resized;
+            } elseif (in_array(strtolower($imageMime), ['image/png', 'image/webp', 'image/gif'], true)) {
+                // Flatten transparent background onto white to avoid dark text becoming unreadable
+                $flattened = imagecreatetruecolor($w, $h);
+                $white = imagecolorallocate($flattened, 255, 255, 255);
+                imagefilledrectangle($flattened, 0, 0, $w, $h, $white);
+                imagecopy($flattened, $img, 0, 0, 0, 0, $w, $h);
+                imagedestroy($img);
+                $img = $flattened;
+            }
+
+            ob_start();
+            imagejpeg($img, null, 85);
+            $optBytes = ob_get_clean();
+            imagedestroy($img);
+
+            if (!empty($optBytes) && strlen($optBytes) < strlen($imageBytes)) {
+                return ['bytes' => $optBytes, 'mime' => 'image/jpeg'];
+            }
+        } catch (Throwable $e) {
+            // Non-blocking fallback to original bytes
+        }
+
+        return ['bytes' => $imageBytes, 'mime' => $imageMime];
     }
 
     /**
@@ -172,6 +321,7 @@ class PeppUpdatesAiService {
             if (method_exists($this->customProvider, 'generateContentRaw')) {
                 $raw = $this->customProvider->generateContentRaw('Generate description', ['title' => $title, 'short_desc' => $shortDescription]);
                 $clean = pepp_updates_sanitize_html(is_string($raw) ? $raw : json_encode($raw));
+                $clean = str_replace(["\xE2\x80\x94", '&mdash;', '&#8212;', '&#x2014;'], '-', $clean);
                 return [
                     'success'          => true,
                     'full_description' => $clean,
@@ -198,6 +348,7 @@ STRICT FACTUAL CAUTION RULES:
   - <ul> and <li> for lists of key highlights, required steps, or subjects.
   - <strong> for critical highlights.
 - Do NOT wrap your output in markdown code blocks like ```html. Output raw HTML directly.
+- Do NOT use em dashes. Use a standard hyphen (-) for ranges, dates, or separators.
 PROMPT;
 
         $promptText = $systemPrompt . "\n\n" .
@@ -205,9 +356,12 @@ PROMPT;
                       "SHORT DESCRIPTION: " . $shortDescription . "\n\n" .
                       "Please inspect the banner image carefully, extract any visible dates, courses, exams, or instructions, and generate the complete HTML full description.";
 
-        // 5. Execute Gemini Multimodal Vision API call with transient retry and 404 fallback
+        // 5. Execute Gemini Multimodal Vision API call with network optimization, transient retry, and 404 fallback
         try {
-            $base64Data = base64_encode($imageBytes);
+            // Optimize banner image for vision OCR if large (reduces bandwidth & latency)
+            $visionImage = self::optimizeBannerForVision($imageBytes, $imageMime);
+            $base64Data = base64_encode($visionImage['bytes']);
+            $visionMime = $visionImage['mime'];
 
             $payload = [
                 'contents' => [
@@ -219,7 +373,7 @@ PROMPT;
                             ],
                             [
                                 'inlineData' => [
-                                    'mimeType' => $imageMime,
+                                    'mimeType' => $visionMime,
                                     'data'     => $base64Data
                                 ]
                             ]
@@ -233,9 +387,12 @@ PROMPT;
 
             $payloadJson = json_encode($payload, JSON_UNESCAPED_SLASHES);
 
-            // Candidate models: Primary model followed by verified, currently supported Flash fallback candidates
+            $timeout = self::resolveTimeout($this->pdo);
+            $connectTimeout = self::resolveConnectTimeout($this->pdo);
+
+            // Candidate models: Primary model followed by verified fallback candidates
             $candidateModels = [$this->model];
-            foreach (['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite'] as $fb) {
+            foreach (['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash'] as $fb) {
                 if (!in_array($fb, $candidateModels, true)) {
                     $candidateModels[] = $fb;
                 }
@@ -250,11 +407,12 @@ PROMPT;
             foreach ($candidateModels as $candidateModel) {
                 $url = 'https://generativelanguage.googleapis.com/v1beta/models/' . urlencode($candidateModel) . ':generateContent';
 
-                $maxAttempts = 3;
-                $retryDelays = [1 => 2, 2 => 4];
+                $maxAttempts = 2; // Bounded attempts to prevent long delays
+                $retryDelays = [1 => 2];
                 $response = null;
                 $httpCode = 0;
                 $curlError = '';
+                $curlErrNo = 0;
 
                 for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
                     $ch = curl_init($url);
@@ -264,16 +422,18 @@ PROMPT;
                         CURLOPT_POSTFIELDS     => $payloadJson,
                         CURLOPT_HTTPHEADER     => [
                             'Content-Type: application/json',
+                            'Expect:', // Prevents libcurl 100-continue hang on large POST bodies
                             'x-goog-api-key: ' . $this->apiKey
                         ],
-                        CURLOPT_TIMEOUT        => 35,
-                        CURLOPT_CONNECTTIMEOUT => 10,
+                        CURLOPT_TIMEOUT        => $timeout,
+                        CURLOPT_CONNECTTIMEOUT => $connectTimeout,
                         CURLOPT_SSL_VERIFYPEER => true
                     ]);
 
                     $response = curl_exec($ch);
                     $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
                     $curlError = (string)curl_error($ch);
+                    $curlErrNo = (int)curl_errno($ch);
                     curl_close($ch);
 
                     if ($httpCode === 200 && !empty($response)) {
@@ -288,10 +448,24 @@ PROMPT;
                         continue;
                     }
 
+                    // Never retry on timeouts or connection errors
                     break;
                 }
 
                 if ($curlError !== '') {
+                    // Distinguish timeout vs connect failure
+                    if ($curlErrNo === 28 || strpos(strtolower($curlError), 'timed out') !== false) {
+                        return [
+                            'success' => false,
+                            'error'   => "AI service request timed out after {$timeout} seconds. The banner image may be large or the AI service is experiencing high latency. Please try again with a compressed image or try again in a few moments."
+                        ];
+                    }
+                    if ($curlErrNo === 7 || strpos(strtolower($curlError), 'failed to connect') !== false || strpos(strtolower($curlError), "couldn't connect") !== false) {
+                        return [
+                            'success' => false,
+                            'error'   => 'AI service network connection error: Unable to connect to Google Generative Language service. Please verify server internet connectivity.'
+                        ];
+                    }
                     return [
                         'success' => false,
                         'error'   => 'AI service network connection error: ' . htmlspecialchars($curlError)
@@ -381,8 +555,12 @@ PROMPT;
             }
             $cleanText = trim($cleanText);
 
-            // Sanitize through PEPP Updates HTML sanitizer
+            // Normalize em dashes to hyphens
+            $cleanText = str_replace(["\xE2\x80\x94", '&mdash;', '&#8212;', '&#x2014;'], '-', $cleanText);
+
+            // Sanitize through PEPP Updates HTML sanitizer and normalize
             $sanitizedHtml = pepp_updates_sanitize_html($cleanText);
+            $sanitizedHtml = str_replace(["\xE2\x80\x94", '&mdash;', '&#8212;', '&#x2014;'], '-', $sanitizedHtml);
 
             return [
                 'success'          => true,

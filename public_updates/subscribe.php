@@ -1,6 +1,6 @@
 <?php
 /**
- * PEPP Updates Public Portal — WhatsApp Subscription Page
+ * PEPP Updates Public Portal - WhatsApp Subscription Page
  *
  * Route: /subscribe or /subscribe.php
  *
@@ -158,7 +158,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 // SEO
 $pageSeo = [
-    'title'       => 'Get Updates on WhatsApp — PEPP Updates',
+    'title'       => 'Get Updates on WhatsApp - PEPP Updates',
     'description' => 'Subscribe to official PEPP Learning educational notifications, entrance exam alerts, and university admission announcements on WhatsApp.',
     'canonical'   => pepp_seo_get_base_url() . '/subscribe',
     'og_type'     => 'website',

@@ -1,6 +1,6 @@
 <?php
 /**
- * PEPP Updates — Admin Dashboard
+ * PEPP Updates - Admin Dashboard
  * 
  * Displays core metrics, quick actions, recent updates, and delivery campaign status.
  */
@@ -260,7 +260,7 @@ include 'includes/admin_nav.php';
                                     </td>
                                     <td>
                                         <span class="cell-sub">
-                                            <?php echo !empty($post['publish_at']) ? date('d M Y, h:i A', strtotime($post['publish_at'])) : '—'; ?>
+                                            <?php echo !empty($post['publish_at']) ? date('d M Y, h:i A', strtotime($post['publish_at'])) : '-'; ?>
                                         </span>
                                     </td>
                                     <td style="text-align: right;">
@@ -338,7 +338,7 @@ include 'includes/admin_nav.php';
                                     </td>
                                     <td>
                                         <span class="cell-sub">
-                                            <?php echo !empty($camp['scheduled_at']) ? date('d M Y, h:i A', strtotime($camp['scheduled_at'])) : '—'; ?>
+                                            <?php echo !empty($camp['scheduled_at']) ? date('d M Y, h:i A', strtotime($camp['scheduled_at'])) : '-'; ?>
                                         </span>
                                     </td>
                                     <td style="text-align: right;">
@@ -488,7 +488,7 @@ function openViewAnalytics(postId, postTitle) {
                     var tr = document.createElement('tr');
 
                     var locHtml = '<span class="badge gray">Not Shared</span>';
-                    var mapHtml = '<span style="color:var(--secondary);font-size:0.75rem;">—</span>';
+                    var mapHtml = '<span style="color:var(--secondary);font-size:0.75rem;">-</span>';
                     if (v.location_status === 'granted' && v.latitude && v.longitude) {
                         locHtml = '<span class="badge green"><i class="fas fa-location-dot"></i> Granted</span>';
                         var lat = parseFloat(v.latitude).toFixed(4);
@@ -501,7 +501,7 @@ function openViewAnalytics(postId, postTitle) {
                     }
 
                     var ipDisplay = v.ip_address || (v.ip_hash ? ('Hash: ' + v.ip_hash.substring(0, 10) + '...') : 'Unknown');
-                    var sessDisplay = v.session_id ? ('<code>' + v.session_id.substring(0, 8) + '...</code>') : '<span style="color:var(--secondary);">—</span>';
+                    var sessDisplay = v.session_id ? ('<code>' + v.session_id.substring(0, 8) + '...</code>') : '<span style="color:var(--secondary);">-</span>';
 
                     tr.innerHTML = '<td>' + (v.created_at || v.visit_date) + '</td>' +
                                    '<td><strong>' + (v.post_title || 'Homepage') + '</strong></td>' +
@@ -519,8 +519,8 @@ function openViewAnalytics(postId, postTitle) {
                 wrapC.style.display = 'block';
                 clicks.forEach(function(c) {
                     var tr = document.createElement('tr');
-                    var sessDisplay = c.session_id ? ('<code>' + c.session_id.substring(0, 8) + '...</code>') : '—';
-                    var targetDisplay = c.target_url ? ('<a href="' + c.target_url + '" target="_blank" style="font-size:0.75rem;color:var(--accent);">' + c.target_url.substring(0, 30) + '...</a>') : '—';
+                    var sessDisplay = c.session_id ? ('<code>' + c.session_id.substring(0, 8) + '...</code>') : '-';
+                    var targetDisplay = c.target_url ? ('<a href="' + c.target_url + '" target="_blank" style="font-size:0.75rem;color:var(--accent);">' + c.target_url.substring(0, 30) + '...</a>') : '-';
                     tr.innerHTML = '<td>' + c.created_at + '</td>' +
                                    '<td>' + (c.post_title || 'General') + '</td>' +
                                    '<td><span class="badge blue">' + (c.action_name || c.button_name || 'click') + '</span></td>' +

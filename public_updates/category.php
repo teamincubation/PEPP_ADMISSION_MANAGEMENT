@@ -1,6 +1,6 @@
 <?php
 /**
- * PEPP Updates Public Portal — Category Updates Page
+ * PEPP Updates Public Portal - Category Updates Page
  *
  * Route: /category/{slug} or /category.php?slug={slug}
  */
@@ -42,7 +42,7 @@ $totalPages = $updatesData['total_pages'];
 // SEO
 $currentUrl = pepp_seo_get_base_url() . pepp_public_url('category', $category['slug']);
 $pageSeo = [
-    'title'       => $category['name'] . ' Updates — PEPP Updates',
+    'title'       => $category['name'] . ' Updates - PEPP Updates',
     'description' => $category['description'] ?: "Official {$category['name']} entrance exam notifications and admission alerts from PEPP Learning.",
     'canonical'   => $currentUrl,
     'og_type'     => 'website',

@@ -1,6 +1,6 @@
 <?php
 /**
- * PEPP Updates Public Portal — Bootstrap Entrypoint
+ * PEPP Updates Public Portal - Bootstrap Entrypoint
  *
  * Configures runtime environment, database bridge, core helper functions,
  * and security headers.

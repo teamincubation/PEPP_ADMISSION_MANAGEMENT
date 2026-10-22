@@ -1,6 +1,6 @@
 <?php
 /**
- * PEPP Updates — Settings Management
+ * PEPP Updates - Settings Management
  * 
  * Manage configurable settings stored in updates_settings table.
  * Supports configurable NEW label badge duration days (1-90 days).
@@ -10,7 +10,7 @@ require_once 'includes/auth.php';
 require_permission('pepp-updates');
 require_once 'includes/pepp_updates_helper.php';
 
-$page_title = 'PEPP Updates — Settings';
+$page_title = 'PEPP Updates - Settings';
 $page_sub = 'Configure update visibility, NEW badge duration, and module parameters';
 $active_page = 'pepp-updates-settings';
 
@@ -172,7 +172,7 @@ include 'includes/admin_nav.php';
                                     <tr>
                                         <td><code><?php echo htmlspecialchars($s['setting_key']); ?></code></td>
                                         <td><strong><?php echo htmlspecialchars($s['setting_value']); ?></strong></td>
-                                        <td><span class="cell-sub"><?php echo !empty($s['updated_at']) ? date('d M Y', strtotime($s['updated_at'])) : '—'; ?></span></td>
+                                        <td><span class="cell-sub"><?php echo !empty($s['updated_at']) ? date('d M Y', strtotime($s['updated_at'])) : '-'; ?></span></td>
                                     </tr>
                                 <?php endforeach; ?>
                             </tbody>

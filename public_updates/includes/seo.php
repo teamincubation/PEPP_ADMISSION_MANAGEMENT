@@ -1,6 +1,6 @@
 <?php
 /**
- * PEPP Updates Public Portal — SEO & Structured Data Helper
+ * PEPP Updates Public Portal - SEO & Structured Data Helper
  *
  * Implements dynamic metadata, canonical links, Open Graph, Twitter cards,
  * and JSON-LD structured data schema (Article / NewsArticle / WebSite).
@@ -25,6 +25,7 @@ function pepp_seo_get_base_url(): string {
 function pepp_seo_clean_text(?string $text, int $maxLen = 160): string {
     if (!$text) return '';
     $clean = strip_tags($text);
+    $clean = str_replace(["\xE2\x80\x94", '&mdash;', '&#8212;', '&#x2014;'], '-', $clean);
     $clean = preg_replace('/\s+/', ' ', $clean);
     $clean = trim($clean);
     if (mb_strlen($clean) > $maxLen) {
@@ -39,7 +40,7 @@ function pepp_seo_render(array $seo = []): void {
     $defaultDesc = 'Official updates, entrance exam notifications, career alerts, admission updates, and academic notifications from PEPP Learning.';
     $defaultImg  = $baseUrl . '/assets/images/pepp-updates-og.png';
 
-    $title       = !empty($seo['title']) ? $seo['title'] . ' | ' . $siteName : $siteName . ' — Career, Exam & Admission Notifications';
+    $title       = !empty($seo['title']) ? $seo['title'] . ' | ' . $siteName : $siteName . ' - Career, Exam & Admission Notifications';
     $description = !empty($seo['description']) ? pepp_seo_clean_text($seo['description'], 160) : $defaultDesc;
     $canonical   = !empty($seo['canonical']) ? $seo['canonical'] : $baseUrl . ($_SERVER['REQUEST_URI'] ?? '/');
     $ogType      = !empty($seo['og_type']) ? $seo['og_type'] : 'website';

@@ -1,6 +1,6 @@
 <?php
 /**
- * PEPP Updates Public Portal — Search Page
+ * PEPP Updates Public Portal - Search Page
  *
  * Route: /search or /search.php?q={query}
  */
@@ -28,7 +28,7 @@ if ($query !== '') {
 }
 
 // SEO
-$pageTitle = ($query !== '') ? "Search: {$query} — PEPP Updates" : "Search Updates — PEPP Updates";
+$pageTitle = ($query !== '') ? "Search: {$query} - PEPP Updates" : "Search Updates - PEPP Updates";
 $pageSeo = [
     'title'       => $pageTitle,
     'description' => "Search university admissions, entrance exams, psychology updates, and career alerts on PEPP Updates.",

@@ -1,6 +1,6 @@
 <?php
 /**
- * PEPP Updates Public Portal — Interaction & Location Telemetry Endpoint
+ * PEPP Updates Public Portal - Interaction & Location Telemetry Endpoint
  * Handles beacon/AJAX telemetry for privacy-conscious click and location tracking.
  */
 

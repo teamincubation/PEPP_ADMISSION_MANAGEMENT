@@ -1,6 +1,6 @@
 <?php
 /**
- * PEPP Updates — Posts / Updates Management
+ * PEPP Updates - Posts / Updates Management
  * 
  * Full CRUD, category-aware keyword tagging, Quill rich text editor,
  * banner upload, lifecycle management, preview modal, and server-side pagination.
@@ -10,7 +10,7 @@ require_once 'includes/auth.php';
 require_permission('pepp-updates');
 require_once 'includes/pepp_updates_helper.php';
 
-$page_title = 'PEPP Updates — Posts';
+$page_title = 'PEPP Updates - Posts';
 $page_sub = 'Manage career alerts, admission notifications, exam updates, and publication lifecycle';
 $active_page = 'pepp-updates-posts';
 
@@ -374,6 +374,9 @@ if ($action === 'analytics_data') {
 // AJAX AI FULL DESCRIPTION GENERATION (Requirement 4)
 // ─────────────────────────────────────────────────────────────
 if ($action === 'ai_generate_description') {
+    if (function_exists('set_time_limit')) {
+        @set_time_limit(90);
+    }
     header('Content-Type: application/json; charset=utf-8');
 
     // 1. Verify CSRF
@@ -657,8 +660,38 @@ if ($action === 'create' || $action === 'edit') {
         }
         .ql-container.ql-snow { border-color: var(--border, #cbd5e1); border-bottom-left-radius: 9px; border-bottom-right-radius: 9px; font-size: 0.95rem; }
 
+        /* Hide all raw select elements in Quill toolbar so admin-theme.css form select rule does not leak */
+        .ql-toolbar select,
+        .ql-toolbar.ql-snow select,
+        .quill-editor-container select,
+        #quillEditor select,
+        .ql-snow .ql-toolbar select {
+            display: none !important;
+            visibility: hidden !important;
+            height: 0 !important;
+            width: 0 !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            border: none !important;
+            position: absolute !important;
+            pointer-events: none !important;
+            appearance: none !important;
+            -webkit-appearance: none !important;
+            background: none !important;
+        }
+
         /* Ensure pickers (dropdowns) have high contrast, visible labels, and top z-index */
-        .ql-snow .ql-picker { position: relative; }
+        .ql-snow .ql-picker {
+            display: inline-block !important;
+            position: relative;
+            vertical-align: middle;
+            height: 28px;
+        }
+        .ql-snow .ql-picker.ql-expanded .ql-picker-options {
+            display: block !important;
+            top: 100% !important;
+            margin-top: 2px !important;
+        }
         .ql-snow .ql-picker-label {
             display: inline-flex;
             align-items: center;
@@ -1197,6 +1230,29 @@ include 'includes/admin_nav.php';
         else if (v === 'monospace') el.setAttribute('data-label', 'Monospace');
         else el.setAttribute('data-label', 'Sans Serif');
     });
+
+    // Populate fallback labels on underlying toolbar selects
+    document.querySelectorAll('.ql-toolbar select.ql-font option').forEach(function(opt) {
+        var v = opt.value;
+        if (v === 'serif') opt.textContent = 'Serif';
+        else if (v === 'monospace') opt.textContent = 'Monospace';
+        else opt.textContent = 'Sans Serif';
+    });
+    document.querySelectorAll('.ql-toolbar select.ql-size option').forEach(function(opt) {
+        var v = opt.value;
+        if (v === 'small') opt.textContent = 'Small';
+        else if (v === 'large') opt.textContent = 'Large';
+        else if (v === 'huge') opt.textContent = 'Huge';
+        else opt.textContent = 'Normal Size';
+    });
+    document.querySelectorAll('.ql-toolbar select.ql-header option').forEach(function(opt) {
+        var v = opt.value;
+        if (v === '1') opt.textContent = 'Heading 1';
+        else if (v === '2') opt.textContent = 'Heading 2';
+        else if (v === '3') opt.textContent = 'Heading 3';
+        else opt.textContent = 'Normal Text';
+    });
+
     // Dynamic Enabling for 'Generate with AI' Button
     function updateAiButtonState() {
         var btn = document.getElementById('btnAiGenerate');
@@ -1286,11 +1342,28 @@ include 'includes/admin_nav.php';
             formData.append('banner', bannerInput.files[0]);
         }
 
+        var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+        var fetchTimeout = controller ? setTimeout(function() { controller.abort(); }, 65000) : null;
+
         fetch('pepp-updates-posts.php?action=ai_generate_description', {
             method: 'POST',
-            body: formData
+            body: formData,
+            signal: controller ? controller.signal : undefined
         })
         .then(function(res) {
+            if (fetchTimeout) clearTimeout(fetchTimeout);
+            if (!res.ok) {
+                return res.text().then(function(text) {
+                    var safeMsg = 'Server responded with HTTP ' + res.status;
+                    try {
+                        var parsed = JSON.parse(text);
+                        if (parsed && parsed.error) safeMsg = parsed.error;
+                    } catch (e) {
+                        if (res.status === 504) safeMsg = 'Gateway Timeout: The AI generation request took too long. Please try with a smaller banner image or retry shortly.';
+                    }
+                    throw new Error(safeMsg);
+                });
+            }
             return res.json();
         })
         .then(function(data) {
@@ -1311,15 +1384,25 @@ include 'includes/admin_nav.php';
                     editorEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 }
 
-                alert('AI Full Description generated successfully!\n\nPlease review and verify all details before saving or publishing.');
+                setTimeout(function() {
+                    alert('AI Full Description generated successfully!\n\nPlease review and verify all details before saving or publishing.');
+                }, 50);
             } else {
-                alert('AI Generation Error: ' + (data.error || 'Failed to generate description.'));
+                setTimeout(function() {
+                    alert('AI Generation Error: ' + (data.error || 'Failed to generate description.'));
+                }, 50);
             }
         })
         .catch(function(err) {
+            if (fetchTimeout) clearTimeout(fetchTimeout);
             btn.innerHTML = originalBtnHtml;
             updateAiButtonState();
-            alert('AI Generation Network Error: ' + (err.message || 'Unable to reach the server.'));
+            var errMsg = (err.name === 'AbortError')
+                ? 'AI request timed out after 65 seconds without a response. Please check your connection or try again.'
+                : (err.message || 'Unable to reach the server.');
+            setTimeout(function() {
+                alert('AI Generation Error: ' + errMsg);
+            }, 50);
         });
     }
 
@@ -1530,7 +1613,7 @@ include 'includes/admin_nav.php';
                                     </td>
                                     <td>
                                         <span class="cell-sub">
-                                            <?php echo !empty($p['publish_at']) ? date('d M Y, h:i A', strtotime($p['publish_at'])) : '—'; ?>
+                                            <?php echo !empty($p['publish_at']) ? date('d M Y, h:i A', strtotime($p['publish_at'])) : '-'; ?>
                                         </span>
                                     </td>
                                     <td>
@@ -1875,7 +1958,7 @@ function openViewAnalytics(postId, postTitle) {
 
                     // Location status badge & map link
                     var locHtml = '<span class="badge gray">Not Shared</span>';
-                    var mapHtml = '<span style="color:var(--secondary);font-size:0.75rem;">—</span>';
+                    var mapHtml = '<span style="color:var(--secondary);font-size:0.75rem;">-</span>';
                     if (v.location_status === 'granted' && v.latitude && v.longitude) {
                         locHtml = '<span class="badge green"><i class="fas fa-location-dot"></i> Granted</span>';
                         var lat = parseFloat(v.latitude).toFixed(4);
@@ -1888,7 +1971,7 @@ function openViewAnalytics(postId, postTitle) {
                     }
 
                     var ipDisplay = v.ip_address || (v.ip_hash ? ('Hash: ' + v.ip_hash.substring(0, 10) + '...') : 'Unknown');
-                    var sessDisplay = v.session_id ? ('<code>' + v.session_id.substring(0, 8) + '...</code>') : '<span style="color:var(--secondary);">—</span>';
+                    var sessDisplay = v.session_id ? ('<code>' + v.session_id.substring(0, 8) + '...</code>') : '<span style="color:var(--secondary);">-</span>';
                     var refDisplay = v.referer ? ('<div style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + v.referer + '">' + v.referer + '</div>') : '<span style="color:var(--secondary);">Direct / None</span>';
 
                     tr.innerHTML = '<td>' + (v.created_at || v.visit_date) + '</td>' +
@@ -1907,8 +1990,8 @@ function openViewAnalytics(postId, postTitle) {
                 wrapC.style.display = 'block';
                 clicks.forEach(function(c) {
                     var tr = document.createElement('tr');
-                    var sessDisplay = c.session_id ? ('<code>' + c.session_id.substring(0, 8) + '...</code>') : '—';
-                    var targetDisplay = c.target_url ? ('<a href="' + c.target_url + '" target="_blank" style="font-size:0.75rem;color:var(--accent);">' + c.target_url.substring(0, 35) + '...</a>') : '—';
+                    var sessDisplay = c.session_id ? ('<code>' + c.session_id.substring(0, 8) + '...</code>') : '-';
+                    var targetDisplay = c.target_url ? ('<a href="' + c.target_url + '" target="_blank" style="font-size:0.75rem;color:var(--accent);">' + c.target_url.substring(0, 35) + '...</a>') : '-';
                     tr.innerHTML = '<td>' + c.created_at + '</td>' +
                                    '<td><span class="badge blue">' + (c.action_name || c.button_name || 'click') + '</span></td>' +
                                    '<td>' + targetDisplay + '</td>' +

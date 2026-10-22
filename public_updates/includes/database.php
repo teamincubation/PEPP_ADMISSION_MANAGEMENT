@@ -1,6 +1,6 @@
 <?php
 /**
- * PEPP Updates Public Portal — Database Connection Bridge
+ * PEPP Updates Public Portal - Database Connection Bridge
  *
  * Establishes a lightweight, isolated, read-only PDO connection.
  * Completely decoupled from admissions/config/database.php.

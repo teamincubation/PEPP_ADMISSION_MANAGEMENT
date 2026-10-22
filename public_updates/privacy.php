@@ -1,6 +1,6 @@
 <?php
 /**
- * PEPP Updates Public Portal — Privacy Policy
+ * PEPP Updates Public Portal - Privacy Policy
  *
  * Route: /privacy or /privacy.php
  */
@@ -8,7 +8,7 @@
 require_once __DIR__ . '/includes/bootstrap.php';
 
 $pageSeo = [
-    'title'       => 'Privacy Policy — PEPP Updates',
+    'title'       => 'Privacy Policy - PEPP Updates',
     'description' => 'Learn how PEPP Learning and PEPP Updates respect student privacy, data protection, and notification preferences.',
     'canonical'   => pepp_seo_get_base_url() . '/privacy',
     'og_type'     => 'website',

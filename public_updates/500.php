@@ -1,6 +1,6 @@
 <?php
 /**
- * PEPP Updates Public Portal — 500 Server Error Page
+ * PEPP Updates Public Portal - 500 Server Error Page
  */
 
 if (!headers_sent()) {
@@ -12,7 +12,7 @@ if (!headers_sent()) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Server Error — PEPP Updates</title>
+    <title>Server Error - PEPP Updates</title>
     <meta name="robots" content="noindex, nofollow">
     <link rel="icon" type="image/png" href="/assets/images/logo.png">
     <link rel="apple-touch-icon" href="/assets/images/logo.png">

@@ -1,6 +1,6 @@
 <?php
 /**
- * PEPP Updates Public Portal — 404 Not Found Page
+ * PEPP Updates Public Portal - 404 Not Found Page
  */
 
 if (!defined('PEPP_PUBLIC_UPDATES_PORTAL')) {
@@ -12,7 +12,7 @@ if (!headers_sent()) {
 }
 
 $pageSeo = [
-    'title'       => '404 - Page Not Found — PEPP Updates',
+    'title'       => '404 - Page Not Found - PEPP Updates',
     'description' => 'The update or page you requested could not be found on PEPP Updates.',
     'canonical'   => pepp_seo_get_base_url() . '/404.php',
     'og_type'     => 'website',

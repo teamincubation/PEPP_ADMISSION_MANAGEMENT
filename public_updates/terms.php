@@ -1,6 +1,6 @@
 <?php
 /**
- * PEPP Updates Public Portal — Terms of Service
+ * PEPP Updates Public Portal - Terms of Service
  *
  * Route: /terms or /terms.php
  */
@@ -8,7 +8,7 @@
 require_once __DIR__ . '/includes/bootstrap.php';
 
 $pageSeo = [
-    'title'       => 'Terms of Service — PEPP Updates',
+    'title'       => 'Terms of Service - PEPP Updates',
     'description' => 'Terms and conditions governing the use of PEPP Updates portal and notification services.',
     'canonical'   => pepp_seo_get_base_url() . '/terms',
     'og_type'     => 'website',

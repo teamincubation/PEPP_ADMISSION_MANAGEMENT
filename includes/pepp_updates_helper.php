@@ -349,7 +349,8 @@ function pepp_updates_sanitize_html(?string $html): string {
     $raw = trim($html);
 
     if (strpos($raw, '<') === false) {
-        return nl2br(htmlspecialchars($raw, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'));
+        $clean = str_replace(["\xE2\x80\x94", '&mdash;', '&#8212;', '&#x2014;'], '-', $raw);
+        return nl2br(htmlspecialchars($clean, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'));
     }
 
     $libxmlErrors = libxml_use_internal_errors(true);
@@ -483,6 +484,7 @@ function pepp_updates_sanitize_html(?string $html): string {
         foreach ($container->childNodes as $child) {
             $result .= $dom->saveHTML($child);
         }
+        $result = str_replace(["\xE2\x80\x94", '&mdash;', '&#8212;', '&#x2014;'], '-', $result);
         return trim($result);
     }
 
