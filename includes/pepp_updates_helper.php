@@ -37,6 +37,7 @@ function pepp_updates_tables_exist(PDO $pdo): bool {
     return $exists;
 }
 
+if (!function_exists('pepp_updates_table_exists')) {
 /**
  * Checks if a specific PEPP Updates table exists.
  */
@@ -66,6 +67,7 @@ function pepp_updates_table_exists(PDO $pdo, string $tableName): bool {
     } catch (Throwable $e) {
         return $cache[$tableName] = false;
     }
+}
 }
 
 if (!function_exists('pepp_updates_column_exists')) {

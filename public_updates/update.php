@@ -24,6 +24,9 @@ if (!$post) {
     exit;
 }
 
+// Resolve eligible popup ad for current published update article (before headers/output)
+$eligibleAd = pepp_public_get_eligible_ad($pdo, (int)$post['id']);
+
 // Log visit for this post
 pepp_public_log_visit($pdo, (int)$post['id']);
 
@@ -256,6 +259,112 @@ require_once __DIR__ . '/includes/header.php';
         </section>
     <?php endif; ?>
 </div>
+
+<?php if (!empty($eligibleAd)): ?>
+    <div id="pepp-ad-modal-root"
+         class="pepp-ad-modal"
+         role="dialog"
+         aria-modal="true"
+         aria-labelledby="pepp-ad-headline"
+         aria-describedby="pepp-ad-subheadline"
+         data-ad-id="<?php echo (int)$eligibleAd['id']; ?>"
+         data-delay="<?php echo (int)$eligibleAd['popup_delay_seconds']; ?>"
+         style="display:none;">
+        <div class="pepp-ad-backdrop" data-action="close"></div>
+        <div class="pepp-ad-dialog" tabindex="-1">
+            <button type="button" class="pepp-ad-close" aria-label="Close dialog" data-action="close">&times;</button>
+
+            <div class="pepp-ad-content">
+                <?php if (!empty($eligibleAd['image_url'])): ?>
+                    <div class="pepp-ad-media">
+                        <img src="<?php echo htmlspecialchars($eligibleAd['image_url']); ?>" alt="<?php echo htmlspecialchars($eligibleAd['headline'] ?: $eligibleAd['title']); ?>" loading="lazy">
+                    </div>
+                <?php endif; ?>
+
+                <div class="pepp-ad-body">
+                    <?php if (!empty($eligibleAd['headline'])): ?>
+                        <h2 id="pepp-ad-headline" class="pepp-ad-title"><?php echo htmlspecialchars($eligibleAd['headline']); ?></h2>
+                    <?php endif; ?>
+
+                    <?php if (!empty($eligibleAd['subheadline'])): ?>
+                        <p id="pepp-ad-subheadline" class="pepp-ad-subtitle"><?php echo htmlspecialchars($eligibleAd['subheadline']); ?></p>
+                    <?php endif; ?>
+
+                    <form id="pepp-ad-form" class="pepp-ad-form" method="POST" action="/api/ad-enquiry.php" novalidate>
+                        <input type="hidden" name="ad_id" value="<?php echo (int)$eligibleAd['id']; ?>">
+                        <input type="hidden" name="post_id" value="<?php echo (int)$post['id']; ?>">
+                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($eligibleAd['csrf_token']); ?>">
+                        <input type="hidden" name="_form_time" value="<?php echo time(); ?>">
+
+                        <!-- Anti-spam honeypot (hidden from real users) -->
+                        <div style="display:none !important;" aria-hidden="true">
+                            <label for="hp_website">Leave this field blank</label>
+                            <input type="text" id="hp_website" name="hp_website" tabindex="-1" autocomplete="off">
+                        </div>
+
+                        <div id="pepp-ad-alert" class="pepp-ad-alert" style="display:none;" role="alert"></div>
+
+                        <div class="pepp-ad-fields">
+                            <?php if (empty($eligibleAd['fields'])): ?>
+                                <!-- Default fallback fields if no custom fields were configured -->
+                                <div class="pepp-form-group">
+                                    <label for="pepp_lead_name">Full Name <span class="req">*</span></label>
+                                    <input type="text" id="pepp_lead_name" name="name" class="pepp-form-control" placeholder="Enter your full name" required>
+                                </div>
+                                <div class="pepp-form-group">
+                                    <label for="pepp_lead_phone">Mobile Number <span class="req">*</span></label>
+                                    <input type="tel" id="pepp_lead_phone" name="phone" class="pepp-form-control" placeholder="10-digit mobile number" required pattern="[0-9]{10}">
+                                </div>
+                            <?php else: ?>
+                                <?php foreach ($eligibleAd['fields'] as $fld):
+                                    $fId = 'pepp_field_' . (int)$fld['id'];
+                                    $fName = htmlspecialchars($fld['field_name']);
+                                    $fLabel = htmlspecialchars($fld['field_label']);
+                                    $fType = $fld['field_type'];
+                                    $isReq = (int)$fld['is_required'] === 1;
+                                    $options = $fld['options_list'] ?? [];
+                                ?>
+                                    <div class="pepp-form-group">
+                                        <label for="<?php echo $fId; ?>">
+                                            <?php echo $fLabel; ?>
+                                            <?php if ($isReq): ?><span class="req">*</span><?php endif; ?>
+                                        </label>
+
+                                        <?php if ($fType === 'select'): ?>
+                                            <select id="<?php echo $fId; ?>" name="<?php echo $fName; ?>" class="pepp-form-control" <?php echo $isReq ? 'required' : ''; ?>>
+                                                <option value="">-- Select an option --</option>
+                                                <?php foreach ($options as $opt): ?>
+                                                    <option value="<?php echo htmlspecialchars($opt); ?>"><?php echo htmlspecialchars($opt); ?></option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                        <?php elseif ($fType === 'textarea'): ?>
+                                            <textarea id="<?php echo $fId; ?>" name="<?php echo $fName; ?>" class="pepp-form-control" rows="3" placeholder="<?php echo $fLabel; ?>" <?php echo $isReq ? 'required' : ''; ?>></textarea>
+                                        <?php elseif ($fType === 'tel' || $fType === 'phone'): ?>
+                                            <input type="tel" id="<?php echo $fId; ?>" name="<?php echo $fName; ?>" class="pepp-form-control" placeholder="10-digit mobile number" <?php echo $isReq ? 'required' : ''; ?>>
+                                        <?php elseif ($fType === 'email'): ?>
+                                            <input type="email" id="<?php echo $fId; ?>" name="<?php echo $fName; ?>" class="pepp-form-control" placeholder="yourname@example.com" <?php echo $isReq ? 'required' : ''; ?>>
+                                        <?php elseif ($fType === 'number'): ?>
+                                            <input type="number" id="<?php echo $fId; ?>" name="<?php echo $fName; ?>" class="pepp-form-control" placeholder="Enter number" <?php echo $isReq ? 'required' : ''; ?>>
+                                        <?php else: ?>
+                                            <input type="text" id="<?php echo $fId; ?>" name="<?php echo $fName; ?>" class="pepp-form-control" placeholder="<?php echo $fLabel; ?>" <?php echo $isReq ? 'required' : ''; ?>>
+                                        <?php endif; ?>
+                                    </div>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </div>
+
+                        <div class="pepp-form-action">
+                            <button type="submit" class="btn-ad-submit" id="pepp-ad-submit-btn">
+                                <span><?php echo htmlspecialchars($eligibleAd['button_text'] ?: 'Submit Enquiry'); ?></span>
+                                <svg class="spinner" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="display:none;"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle><path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"></path></svg>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+<?php endif; ?>
 
 <?php
 require_once __DIR__ . '/includes/footer.php';

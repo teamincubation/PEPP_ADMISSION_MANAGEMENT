@@ -226,4 +226,227 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         }
     }
+
+    // 6. PEPP Updates — Phase 3: Popup Ad Controller
+    (function initPopupAd() {
+        var modalRoot = document.getElementById('pepp-ad-modal-root');
+        if (!modalRoot) return;
+
+        // Never trigger popup for automated test runners / headless bots
+        if (navigator.webdriver) return;
+
+        var adId = modalRoot.getAttribute('data-ad-id');
+        if (!adId) return;
+
+        // Privacy-conscious session check: do not show repeatedly in the same session
+        var sessionKey = 'pepp_ad_seen_' + adId;
+        try {
+            if (sessionStorage.getItem(sessionKey)) {
+                return;
+            }
+        } catch (e) {}
+
+        var rawDelay = parseInt(modalRoot.getAttribute('data-delay') || '15', 10);
+        var targetDelaySec = Math.max(1, Math.min(600, isNaN(rawDelay) ? 15 : rawDelay));
+        var targetDelayMs = targetDelaySec * 1000;
+
+        var elapsedMs = 0;
+        var lastTime = Date.now();
+        var timerId = null;
+        var isModalOpen = false;
+        var lastFocusedElement = null;
+
+        var dialogEl = modalRoot.querySelector('.pepp-ad-dialog');
+        var formEl = document.getElementById('pepp-ad-form');
+        var alertEl = document.getElementById('pepp-ad-alert');
+        var submitBtn = document.getElementById('pepp-ad-submit-btn');
+
+        function openModal() {
+            if (isModalOpen) return;
+            isModalOpen = true;
+            lastFocusedElement = document.activeElement;
+
+            modalRoot.style.display = 'flex';
+            document.body.style.overflow = 'hidden';
+
+            // Accessibility: Focus first input or dialog container
+            setTimeout(function() {
+                var firstInput = modalRoot.querySelector('input:not([type="hidden"]), select, textarea, button');
+                if (firstInput) {
+                    firstInput.focus();
+                } else if (dialogEl) {
+                    dialogEl.focus();
+                }
+            }, 50);
+        }
+
+        function closeModal() {
+            if (!isModalOpen) return;
+            isModalOpen = false;
+            modalRoot.style.display = 'none';
+            document.body.style.overflow = '';
+
+            try {
+                sessionStorage.setItem(sessionKey, '1');
+            } catch (e) {}
+
+            if (lastFocusedElement && typeof lastFocusedElement.focus === 'function') {
+                lastFocusedElement.focus();
+            }
+        }
+
+        // Visibility-Aware Delay Timer
+        // Time only elapses while the tab/page is visible (document.hidden === false)
+        timerId = setInterval(function() {
+            var now = Date.now();
+            var delta = now - lastTime;
+            lastTime = now;
+
+            if (!document.hidden) {
+                elapsedMs += delta;
+                if (elapsedMs >= targetDelayMs) {
+                    clearInterval(timerId);
+                    openModal();
+                }
+            }
+        }, 200);
+
+        // Click on close button or backdrop
+        modalRoot.addEventListener('click', function(e) {
+            var target = e.target;
+            if (target && target.getAttribute('data-action') === 'close') {
+                e.preventDefault();
+                closeModal();
+            }
+        });
+
+        // Keyboard accessibility: ESC key to close, TAB key to trap focus
+        document.addEventListener('keydown', function(e) {
+            if (!isModalOpen) return;
+
+            if (e.key === 'Escape' || e.keyCode === 27) {
+                e.preventDefault();
+                closeModal();
+                return;
+            }
+
+            if (e.key === 'Tab' || e.keyCode === 9) {
+                var focusables = modalRoot.querySelectorAll(
+                    'button:not([disabled]), input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+                );
+                if (focusables.length === 0) return;
+
+                var first = focusables[0];
+                var last = focusables[focusables.length - 1];
+
+                if (e.shiftKey) {
+                    if (document.activeElement === first) {
+                        e.preventDefault();
+                        last.focus();
+                    }
+                } else {
+                    if (document.activeElement === last) {
+                        e.preventDefault();
+                        first.focus();
+                    }
+                }
+            }
+        });
+
+        // AJAX Form Submission
+        if (formEl) {
+            formEl.addEventListener('submit', function(e) {
+                e.preventDefault();
+
+                if (alertEl) {
+                    alertEl.style.display = 'none';
+                    alertEl.className = 'pepp-ad-alert';
+                    alertEl.textContent = '';
+                }
+
+                // Client-side quick check
+                var isValid = true;
+                var requiredInputs = formEl.querySelectorAll('[required]');
+                for (var i = 0; i < requiredInputs.length; i++) {
+                    var inp = requiredInputs[i];
+                    if (!inp.value || inp.value.trim() === '') {
+                        isValid = false;
+                        inp.focus();
+                        if (alertEl) {
+                            alertEl.className = 'pepp-ad-alert error';
+                            alertEl.textContent = 'Please fill in all required fields.';
+                            alertEl.style.display = 'block';
+                        }
+                        return;
+                    }
+                }
+
+                // Submit button loading state
+                if (submitBtn) {
+                    submitBtn.disabled = true;
+                    var spinner = submitBtn.querySelector('.spinner');
+                    if (spinner) spinner.style.display = 'inline-block';
+                }
+
+                var formData = new FormData(formEl);
+
+                fetch('/api/ad-enquiry.php', {
+                    method: 'POST',
+                    body: formData,
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .then(function(res) {
+                    return res.json().then(function(data) {
+                        return { status: res.status, ok: res.ok, data: data };
+                    });
+                })
+                .then(function(result) {
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        var spinner = submitBtn.querySelector('.spinner');
+                        if (spinner) spinner.style.display = 'none';
+                    }
+
+                    if (result.ok && result.data && result.data.ok) {
+                        if (alertEl) {
+                            alertEl.className = 'pepp-ad-alert success';
+                            alertEl.textContent = result.data.message || 'Thank you! Your enquiry has been received.';
+                            alertEl.style.display = 'block';
+                        }
+                        formEl.reset();
+
+                        try {
+                            sessionStorage.setItem(sessionKey, '1');
+                        } catch (e) {}
+
+                        // Auto-close dialog after 2.5 seconds
+                        setTimeout(function() {
+                            closeModal();
+                        }, 2500);
+                    } else {
+                        var errMsg = (result.data && result.data.error) ? result.data.error : 'Submission failed. Please check your inputs.';
+                        if (alertEl) {
+                            alertEl.className = 'pepp-ad-alert error';
+                            alertEl.textContent = errMsg;
+                            alertEl.style.display = 'block';
+                        }
+                    }
+                })
+                .catch(function(err) {
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        var spinner = submitBtn.querySelector('.spinner');
+                        if (spinner) spinner.style.display = 'none';
+                    }
+                    if (alertEl) {
+                        alertEl.className = 'pepp-ad-alert error';
+                        alertEl.textContent = 'Network error. Please try again.';
+                        alertEl.style.display = 'block';
+                    }
+                });
+            });
+        }
+    })();
 });

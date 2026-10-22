@@ -366,29 +366,6 @@ if (!function_exists('pepp_updates_column_exists')) {
     }
 }
 
-if (!function_exists('pepp_updates_table_exists')) {
-    /**
-     * Checks if a specific table exists.
-     */
-    function pepp_updates_table_exists(PDO $pdo, string $tableName): bool {
-        static $cache = [];
-        if (isset($cache[$tableName])) return $cache[$tableName];
-        try {
-            $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
-            if ($driver === 'sqlite') {
-                $stmt = $pdo->prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?");
-                $stmt->execute([$tableName]);
-                return $cache[$tableName] = (bool)$stmt->fetchColumn();
-            } else {
-                $stmt = $pdo->prepare("SHOW TABLES LIKE ?");
-                $stmt->execute([$tableName]);
-                return $cache[$tableName] = (bool)$stmt->fetchColumn();
-            }
-        } catch (Throwable $e) {
-            return $cache[$tableName] = false;
-        }
-    }
-}
 
 /**
  * Privacy-conscious visitor logging.
@@ -763,4 +740,545 @@ function pepp_public_get_related_posts(PDO $pdo, int $currentPostId, array $cate
     unset($post);
 
     return $posts;
+}
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * PEPP Updates — Phase 3: Public Popup Ad Resolution & Lead Capture Helpers
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+
+/**
+ * Parses field options string into a clean array for select dropdowns.
+ * Supports JSON arrays, newline-delimited strings, and comma-delimited strings.
+ */
+function pepp_public_parse_field_options(string $raw): array {
+    $raw = trim($raw);
+    if ($raw === '') return [];
+    if (str_starts_with($raw, '[') && str_ends_with($raw, ']')) {
+        $json = json_decode($raw, true);
+        if (is_array($json)) {
+            return array_values(array_filter(array_map('trim', $json)));
+        }
+    }
+    $lines = preg_split('/\r\n|\r|\n/', $raw);
+    $options = [];
+    foreach ($lines as $line) {
+        $line = trim($line);
+        if ($line === '') continue;
+        if (strpos($line, ',') !== false && count($lines) === 1) {
+            $parts = explode(',', $line);
+            foreach ($parts as $p) {
+                $p = trim($p);
+                if ($p !== '') $options[] = $p;
+            }
+        } else {
+            $options[] = $line;
+        }
+    }
+    return $options;
+}
+
+/**
+ * Generates a scoped, session-backed CSRF token for ad enquiry form.
+ */
+function pepp_public_generate_ad_token(int $adId, int $postId): string {
+    if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
+        @session_start();
+    }
+    $salt = defined('AUTH_SALT') ? AUTH_SALT : 'pepp_public_ad_salt_2026';
+    $raw = "pepp_ad_{$adId}_post_{$postId}_" . date('Y-m-d');
+    $token = hash_hmac('sha256', $raw, $salt);
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        $_SESSION['pepp_ad_token_' . $adId . '_' . $postId] = $token;
+    }
+    return $token;
+}
+
+/**
+ * Verifies a scoped CSRF token for ad enquiry form.
+ */
+function pepp_public_verify_ad_token(string $token, int $adId, int $postId): bool {
+    if ($token === '') return false;
+    if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
+        @session_start();
+    }
+    if (session_status() === PHP_SESSION_ACTIVE && isset($_SESSION['pepp_ad_token_' . $adId . '_' . $postId])) {
+        $expected = (string)$_SESSION['pepp_ad_token_' . $adId . '_' . $postId];
+        if ($expected === 'USED') {
+            return false;
+        }
+        if (hash_equals($expected, $token)) {
+            return true;
+        }
+    }
+    $salt = defined('AUTH_SALT') ? AUTH_SALT : 'pepp_public_ad_salt_2026';
+    $today = hash_hmac('sha256', "pepp_ad_{$adId}_post_{$postId}_" . date('Y-m-d'), $salt);
+    if (hash_equals($today, $token)) return true;
+    $yesterday = hash_hmac('sha256', "pepp_ad_{$adId}_post_{$postId}_" . date('Y-m-d', strtotime('-1 day')), $salt);
+    return hash_equals($yesterday, $token);
+}
+
+/**
+ * Retrieves the highest priority active ad eligible for a specific published post.
+ * Excludes draft, paused, and archived ads.
+ * Evaluates both all-posts targeting and post-specific targeting.
+ * Deterministic tie-breaking: display_order DESC, id DESC.
+ */
+function pepp_public_get_eligible_ad(PDO $pdo, int $postId): ?array {
+    if ($postId <= 0 || !pepp_updates_table_exists($pdo, 'updates_ads')) {
+        return null;
+    }
+
+    try {
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        $nowSql = ($driver === 'sqlite') ? "datetime('now')" : "NOW()";
+
+        // Verify originating post exists and is currently published
+        if (pepp_updates_table_exists($pdo, 'updates_posts')) {
+            $stmtPost = $pdo->prepare("
+                SELECT id FROM updates_posts
+                WHERE id = ? AND status = 'published' AND publish_at IS NOT NULL AND publish_at <= {$nowSql}
+                LIMIT 1
+            ");
+            $stmtPost->execute([$postId]);
+            if (!$stmtPost->fetchColumn()) {
+                return null;
+            }
+        }
+
+        $sql = "
+            SELECT DISTINCT a.id, a.title, a.slug, a.headline, a.subheadline, a.image_url,
+                   a.button_text, a.target_all_posts, a.popup_delay_seconds, a.auto_convert_crm,
+                   a.target_course_id, a.status, a.display_order
+            FROM updates_ads a
+            LEFT JOIN updates_ad_posts uap ON (a.id = uap.ad_id)
+            WHERE a.status = 'active'
+              AND (
+                a.target_all_posts = 1
+                OR (a.target_all_posts = 0 AND uap.post_id = ?)
+              )
+            ORDER BY a.display_order DESC, a.id DESC
+            LIMIT 1
+        ";
+
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([$postId]);
+        $ad = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$ad) {
+            return null;
+        }
+
+        // Clamp delay strictly to 1 - 600s
+        $ad['popup_delay_seconds'] = max(1, min(600, (int)($ad['popup_delay_seconds'] ?? 15)));
+
+        // Retrieve custom fields
+        $fields = [];
+        if (pepp_updates_table_exists($pdo, 'updates_ad_fields')) {
+            $stmtFields = $pdo->prepare("
+                SELECT id, ad_id, field_name, field_label, field_type, is_required, field_options, sort_order
+                FROM updates_ad_fields
+                WHERE ad_id = ?
+                ORDER BY sort_order ASC, id ASC
+            ");
+            $stmtFields->execute([(int)$ad['id']]);
+            $rawFields = $stmtFields->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($rawFields as $rf) {
+                $rf['options_list'] = pepp_public_parse_field_options($rf['field_options'] ?? '');
+                $fields[] = $rf;
+            }
+        }
+        $ad['fields'] = $fields;
+
+        // Generate scoped CSRF token
+        $ad['csrf_token'] = pepp_public_generate_ad_token((int)$ad['id'], $postId);
+
+        return $ad;
+    } catch (Throwable $e) {
+        error_log('pepp_public_get_eligible_ad error: ' . $e->getMessage());
+        return null;
+    }
+}
+
+/**
+ * Rate limits public ad lead submissions: max 15 submissions per 10 minutes per IP hash.
+ * Balances abuse prevention with accessibility on shared campus/hostel Wi-Fi networks.
+ */
+function pepp_public_rate_limit_ad_submission(PDO $pdo, string $ipHash): bool {
+    if ($ipHash === '' || !pepp_updates_table_exists($pdo, 'updates_ad_leads')) {
+        return true;
+    }
+    try {
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        $windowSql = ($driver === 'sqlite') ? "datetime('now', '-10 minutes')" : "DATE_SUB(NOW(), INTERVAL 10 MINUTE)";
+        $stmt = $pdo->prepare("
+            SELECT COUNT(*) FROM updates_ad_leads
+            WHERE ip_hash = ? AND created_at >= {$windowSql}
+        ");
+        $stmt->execute([$ipHash]);
+        $count = (int)$stmt->fetchColumn();
+        return $count < 15;
+    } catch (Throwable $e) {
+        return true;
+    }
+}
+
+/**
+ * Checks if identical student + phone + ad was submitted in the last 5 minutes.
+ * Gracefully suppresses rapid duplicate submissions for the same student while
+ * allowing legitimate distinct enquiries (e.g. siblings sharing parent phone).
+ */
+function pepp_public_check_recent_duplicate(PDO $pdo, int $adId, string $phone, string $studentName = ''): bool {
+    if (!pepp_updates_table_exists($pdo, 'updates_ad_leads')) {
+        return false;
+    }
+    try {
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        $windowSql = ($driver === 'sqlite') ? "datetime('now', '-5 minutes')" : "DATE_SUB(NOW(), INTERVAL 5 MINUTE)";
+        $stmt = $pdo->prepare("
+            SELECT id, name, created_at FROM updates_ad_leads
+            WHERE ad_id = ? AND phone = ? AND created_at >= {$windowSql}
+            ORDER BY id DESC
+            LIMIT 1
+        ");
+        $stmt->execute([$adId, $phone]);
+        $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$existing) {
+            return false;
+        }
+
+        // If names are distinct (e.g. siblings or family members using the same contact), do not suppress
+        if ($studentName !== '' && !empty($existing['name'])) {
+            $n1 = mb_strtolower(trim($studentName));
+            $n2 = mb_strtolower(trim($existing['name']));
+            if ($n1 !== $n2 && strpos($n1, $n2) === false && strpos($n2, $n1) === false) {
+                return false; // Distinct student enquiry: allow
+            }
+        }
+
+        return true; // Exact duplicate student submission within 5-min window
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+/**
+ * Validates, processes, and persists a public lead enquiry from an active popup ad.
+ *
+ * @param PDO $pdo Active database connection
+ * @param array $input Form submission data
+ * @param string|null $clientIp Client IP address for rate limiting
+ * @return array Structured result containing ok (bool), http_code (int), and message/error
+ */
+function pepp_public_submit_ad_lead(PDO $pdo, array $input, ?string $clientIp = null): array {
+    // 1. Anti-spam: Honeypot check
+    $honeypot = trim((string)($input['hp_website'] ?? ''));
+    if ($honeypot !== '') {
+        return [
+            'ok' => true,
+            'http_code' => 200,
+            'message' => 'Thank you! Your enquiry has been submitted.',
+        ];
+    }
+
+    // 2. Anti-spam: Submission timestamp verification (reject submissions made in < 1 second)
+    $formTime = (int)($input['_form_time'] ?? 0);
+    $nowTime = time();
+    if ($formTime > 0 && ($nowTime - $formTime) < 1) {
+        return [
+            'ok' => false,
+            'http_code' => 429,
+            'error' => 'Submission too fast. Please take your time to fill the form.',
+        ];
+    }
+
+    // 3. Resolve and validate Ad ID & Post ID
+    $adId = (int)($input['ad_id'] ?? 0);
+    $postId = (int)($input['post_id'] ?? 0);
+
+    if ($adId <= 0 || $postId <= 0) {
+        return [
+            'ok' => false,
+            'http_code' => 400,
+            'error' => 'Invalid ad or post reference.',
+        ];
+    }
+
+    // 4. CSRF Token verification
+    $csrfToken = trim((string)($input['csrf_token'] ?? ''));
+    if (!pepp_public_verify_ad_token($csrfToken, $adId, $postId)) {
+        return [
+            'ok' => false,
+            'http_code' => 403,
+            'error' => 'Security token invalid or expired. Please refresh the page and try again.',
+        ];
+    }
+
+    // 5. Rate Limiting via Salted Daily IP Hash
+    $ip = $clientIp ?: ($_SERVER['REMOTE_ADDR'] ?? '127.0.0.1');
+    $today = date('Y-m-d');
+    $salt = defined('AUTH_SALT') ? AUTH_SALT : ('pepp_public_visit_salt_' . date('Y-m'));
+    $ipHash = hash('sha256', $ip . '_' . $today . '_' . $salt);
+
+    if (!pepp_public_rate_limit_ad_submission($pdo, $ipHash)) {
+        return [
+            'ok' => false,
+            'http_code' => 429,
+            'error' => 'Too many submissions from this connection. Please try again after a few minutes.',
+        ];
+    }
+
+    try {
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        $nowSql = ($driver === 'sqlite') ? "datetime('now')" : "NOW()";
+
+        // 6. Validate Ad state (Must be active)
+        $stmtAd = $pdo->prepare("
+            SELECT id, title, slug, headline, target_all_posts, status, target_course_id, auto_convert_crm
+            FROM updates_ads
+            WHERE id = ?
+            LIMIT 1
+        ");
+        $stmtAd->execute([$adId]);
+        $ad = $stmtAd->fetch(PDO::FETCH_ASSOC);
+
+        if (!$ad || ($ad['status'] ?? '') !== 'active') {
+            return [
+                'ok' => false,
+                'http_code' => 400,
+                'error' => 'This announcement/ad is no longer active.',
+            ];
+        }
+
+        // 7. Validate Post state (Must be published and current)
+        $stmtPost = $pdo->prepare("
+            SELECT id, title, status, publish_at
+            FROM updates_posts
+            WHERE id = ? AND status = 'published' AND publish_at IS NOT NULL AND publish_at <= {$nowSql}
+            LIMIT 1
+        ");
+        $stmtPost->execute([$postId]);
+        $post = $stmtPost->fetch(PDO::FETCH_ASSOC);
+
+        if (!$post) {
+            return [
+                'ok' => false,
+                'http_code' => 400,
+                'error' => 'The originating article is unavailable or not published.',
+            ];
+        }
+
+        // 8. Validate Targeting Eligibility
+        if ((int)$ad['target_all_posts'] !== 1) {
+            $stmtTarget = $pdo->prepare("
+                SELECT 1 FROM updates_ad_posts
+                WHERE ad_id = ? AND post_id = ?
+                LIMIT 1
+            ");
+            $stmtTarget->execute([$adId, $postId]);
+            if (!$stmtTarget->fetchColumn()) {
+                return [
+                    'ok' => false,
+                    'http_code' => 400,
+                    'error' => 'This ad is not designated for this article.',
+                ];
+            }
+        }
+
+        // 9. Fetch Configured Fields for this Ad
+        $configuredFields = [];
+        if (pepp_updates_table_exists($pdo, 'updates_ad_fields')) {
+            $stmtFields = $pdo->prepare("
+                SELECT id, field_name, field_label, field_type, is_required, field_options, sort_order
+                FROM updates_ad_fields
+                WHERE ad_id = ?
+                ORDER BY sort_order ASC, id ASC
+            ");
+            $stmtFields->execute([$adId]);
+            $configuredFields = $stmtFields->fetchAll(PDO::FETCH_ASSOC);
+        }
+
+        // 10. Extract and Validate Form Inputs
+        $submittedData = [];
+        $studentName = '';
+        $studentPhone = '';
+
+        if (isset($input['name'])) {
+            $studentName = trim(strip_tags((string)$input['name']));
+        }
+        if (isset($input['phone'])) {
+            $studentPhone = trim((string)$input['phone']);
+        }
+
+        foreach ($configuredFields as $field) {
+            $fn = $field['field_name'];
+            $fl = $field['field_label'];
+            $ft = $field['field_type'];
+            $req = (int)($field['is_required'] ?? 0) === 1;
+
+            $rawVal = $input[$fn] ?? null;
+            $val = is_string($rawVal) ? trim(strip_tags($rawVal)) : '';
+
+            if ($req && ($val === '' || $rawVal === null)) {
+                return [
+                    'ok' => false,
+                    'http_code' => 422,
+                    'error' => "Please enter your {$fl}.",
+                ];
+            }
+
+            if ($val !== '') {
+                switch ($ft) {
+                    case 'tel':
+                    case 'phone':
+                        $cleanPhone = preg_replace('/[^\d+]/', '', $val);
+                        if (strlen($cleanPhone) < 7 || strlen($cleanPhone) > 20) {
+                            return [
+                                'ok' => false,
+                                'http_code' => 422,
+                                'error' => "Please provide a valid contact number for {$fl}.",
+                            ];
+                        }
+                        $val = $cleanPhone;
+                        if ($studentPhone === '') {
+                            $studentPhone = $cleanPhone;
+                        }
+                        break;
+
+                    case 'email':
+                        if (!filter_var($val, FILTER_VALIDATE_EMAIL)) {
+                            return [
+                                'ok' => false,
+                                'http_code' => 422,
+                                'error' => "Please provide a valid email address for {$fl}.",
+                            ];
+                        }
+                        $val = strtolower($val);
+                        break;
+
+                    case 'number':
+                        if (!is_numeric($val)) {
+                            return [
+                                'ok' => false,
+                                'http_code' => 422,
+                                'error' => "{$fl} must be a valid number.",
+                            ];
+                        }
+                        break;
+
+                    case 'select':
+                        $options = pepp_public_parse_field_options($field['field_options'] ?? '');
+                        if (!empty($options) && !in_array($val, $options, true)) {
+                            return [
+                                'ok' => false,
+                                'http_code' => 422,
+                                'error' => "Please select a valid option for {$fl}.",
+                            ];
+                        }
+                        break;
+
+                    case 'textarea':
+                        if (mb_strlen($val) > 2000) {
+                            $val = mb_substr($val, 0, 2000);
+                        }
+                        break;
+
+                    default:
+                        if (mb_strlen($val) > 255) {
+                            $val = mb_substr($val, 0, 255);
+                        }
+                        if ($studentName === '' && (stripos($fn, 'name') !== false || stripos($fl, 'name') !== false)) {
+                            $studentName = $val;
+                        }
+                        break;
+                }
+            }
+
+            $submittedData[$fn] = $val;
+        }
+
+        if ($studentName === '') {
+            $studentName = trim(strip_tags((string)($input['student_name'] ?? '')));
+        }
+        if ($studentPhone === '') {
+            $studentPhone = preg_replace('/[^\d+]/', '', trim((string)($input['student_phone'] ?? '')));
+        }
+
+        if ($studentName === '') {
+            $studentName = 'Student Enquiry';
+        }
+        if (mb_strlen($studentName) > 150) {
+            $studentName = mb_substr($studentName, 0, 150);
+        }
+
+        $normalizedDigits = preg_replace('/\D/', '', $studentPhone);
+        if (strlen($normalizedDigits) < 10) {
+            if (strlen($studentPhone) === 0) {
+                $studentPhone = '0000000000';
+            } else {
+                return [
+                    'ok' => false,
+                    'http_code' => 422,
+                    'error' => 'Please enter a valid 10-digit mobile number.',
+                ];
+            }
+        }
+        if (mb_strlen($studentPhone) > 25) {
+            $studentPhone = mb_substr($studentPhone, 0, 25);
+        }
+
+        // 11. Duplicate check (last 5 minutes for identical student + phone + ad)
+        if ($studentPhone !== '0000000000' && pepp_public_check_recent_duplicate($pdo, $adId, $studentPhone, $studentName)) {
+            return [
+                'ok' => true,
+                'http_code' => 200,
+                'message' => 'Thank you! We have already received your enquiry and our team will get in touch soon.',
+            ];
+        }
+
+        // 12. Save Lead into updates_ad_leads
+        $courseId = !empty($ad['target_course_id']) ? (int)$ad['target_course_id'] : null;
+        $submittedJson = !empty($submittedData) ? json_encode($submittedData, JSON_UNESCAPED_UNICODE) : null;
+
+        $sqlInsert = "
+            INSERT INTO updates_ad_leads (
+                ad_id, post_id, name, phone, course_id, submitted_data, ip_hash, status, created_at, updated_at
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, 'new', {$nowSql}, {$nowSql}
+            )
+        ";
+
+        $stmtInsert = $pdo->prepare($sqlInsert);
+        $stmtInsert->execute([
+            $adId,
+            $postId,
+            $studentName,
+            $studentPhone,
+            $courseId,
+            $submittedJson,
+            $ipHash,
+        ]);
+
+        $newLeadId = (int)$pdo->lastInsertId();
+
+        // Invalidate single-use session CSRF token to prevent replay
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            $_SESSION['pepp_ad_token_' . $adId . '_' . $postId] = 'USED';
+        }
+
+        return [
+            'ok' => true,
+            'http_code' => 200,
+            'lead_id' => $newLeadId,
+            'message' => 'Thank you! Your enquiry has been received successfully.',
+        ];
+    } catch (Throwable $e) {
+        error_log('PEPP Ad Enquiry Submission Error: ' . $e->getMessage());
+        return [
+            'ok' => false,
+            'http_code' => 500,
+            'error' => 'Unable to submit enquiry right now. Please try again.',
+        ];
+    }
 }

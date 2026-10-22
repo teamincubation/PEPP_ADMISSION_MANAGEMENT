@@ -1268,3 +1268,245 @@ main {
 .rich-content .ql-size-small { font-size: 0.85em; }
 .rich-content .ql-size-large { font-size: 1.25em; font-weight: 600; }
 .rich-content .ql-size-huge { font-size: 1.55em; font-weight: 700; }
+
+/* ============================================================
+   PEPP Updates — Phase 3: Public Popup Ad & Enquiry Form Styles
+   ============================================================ */
+.pepp-ad-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 99999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    box-sizing: border-box;
+}
+
+.pepp-ad-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.65);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    transition: opacity 0.25s ease;
+}
+
+.pepp-ad-dialog {
+    position: relative;
+    z-index: 1;
+    background: #ffffff;
+    width: 100%;
+    max-width: 500px;
+    max-height: 90vh;
+    overflow-y: auto;
+    border-radius: 16px;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.35);
+    animation: peppModalSlideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    outline: none;
+    display: flex;
+    flex-direction: column;
+}
+
+@keyframes peppModalSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(16px) scale(0.97);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+.pepp-ad-close {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(255, 255, 255, 0.95);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+    z-index: 10;
+    color: #475569;
+    transition: background 0.15s, color 0.15s, transform 0.15s;
+}
+
+.pepp-ad-close:hover,
+.pepp-ad-close:focus {
+    background: #f1f5f9;
+    color: #0f172a;
+    transform: scale(1.08);
+    outline: 2px solid var(--primary);
+}
+
+.pepp-ad-content {
+    display: flex;
+    flex-direction: column;
+}
+
+.pepp-ad-media {
+    width: 100%;
+    max-height: 180px;
+    overflow: hidden;
+    background: #f1f5f9;
+    border-top-left-radius: 16px;
+    border-top-right-radius: 16px;
+}
+
+.pepp-ad-media img {
+    width: 100%;
+    height: 100%;
+    max-height: 180px;
+    object-fit: cover;
+    display: block;
+}
+
+.pepp-ad-body {
+    padding: 22px 24px 26px;
+}
+
+.pepp-ad-title {
+    font-size: 1.25rem;
+    font-weight: 800;
+    color: #0f172a;
+    margin-bottom: 6px;
+    line-height: 1.3;
+}
+
+.pepp-ad-subtitle {
+    font-size: 0.88rem;
+    color: #64748b;
+    margin-bottom: 16px;
+    line-height: 1.45;
+}
+
+.pepp-ad-alert {
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-bottom: 14px;
+    line-height: 1.4;
+}
+
+.pepp-ad-alert.error {
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    color: #991b1b;
+}
+
+.pepp-ad-alert.success {
+    background: #ecfdf5;
+    border: 1px solid #a7f3d0;
+    color: #065f46;
+}
+
+.pepp-ad-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.pepp-form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.pepp-form-group label {
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: #334155;
+}
+
+.pepp-form-group label .req {
+    color: #dc2626;
+    margin-left: 2px;
+}
+
+.pepp-form-control {
+    width: 100%;
+    padding: 9px 12px;
+    font-size: 0.88rem;
+    font-family: inherit;
+    border: 1.5px solid #cbd5e1;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #0f172a;
+    box-sizing: border-box;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.pepp-form-control:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px var(--primary-ring);
+}
+
+.pepp-form-action {
+    margin-top: 18px;
+}
+
+.btn-ad-submit {
+    width: 100%;
+    padding: 11px 16px;
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: #ffffff;
+    background: linear-gradient(135deg, #6d28d9 0%, #7c3aed 100%);
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    box-shadow: 0 4px 12px rgba(109, 40, 217, 0.3);
+    transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+}
+
+.btn-ad-submit:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px rgba(109, 40, 217, 0.4);
+}
+
+.btn-ad-submit:active:not(:disabled) {
+    transform: translateY(0);
+}
+
+.btn-ad-submit:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.btn-ad-submit .spinner {
+    animation: peppSpin 0.8s linear infinite;
+}
+
+@keyframes peppSpin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+@media (max-width: 480px) {
+    .pepp-ad-dialog {
+        border-radius: 12px;
+        max-height: 94vh;
+    }
+    .pepp-ad-body {
+        padding: 16px 18px 20px;
+    }
+    .pepp-ad-title {
+        font-size: 1.15rem;
+    }
+}
