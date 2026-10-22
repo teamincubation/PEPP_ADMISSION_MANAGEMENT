@@ -761,6 +761,38 @@ assert_test("7.3: WhatsApp Account 1 and Account 3 isolation strictly maintained
     strpos($rollSql, '1099020233033644') === false
 );
 
+// ─────────────────────────────────────────────────────────────
+// 8. TABLE EXISTENCE HELPER & NATIVE PREPARED STATEMENT SAFETY
+// ─────────────────────────────────────────────────────────────
+echo "\n--- 8. Table Existence Helper & Native Prepared Statement Safety ---\n";
+
+assert_test("8.1: pepp_updates_table_exists detects existing table (updates_ads)",
+    pepp_updates_table_exists($testPdo, 'updates_ads') === true
+);
+assert_test("8.2: pepp_updates_table_exists returns false for non-existent table",
+    pepp_updates_table_exists($testPdo, 'non_existent_table_xyz') === false
+);
+assert_test("8.3: pepp_updates_column_exists detects existing column (updates_ads.title)",
+    pepp_updates_column_exists($testPdo, 'updates_ads', 'title') === true
+);
+assert_test("8.4: pepp_updates_column_exists returns false for non-existent column",
+    pepp_updates_column_exists($testPdo, 'updates_ads', 'non_existent_col_xyz') === false
+);
+
+$helperSource = file_get_contents(__DIR__ . '/includes/pepp_updates_helper.php');
+assert_test("8.5: pepp_updates_table_exists does NOT prepare SHOW TABLES with placeholder (avoids MariaDB 1064 under native prepares)",
+    strpos($helperSource, 'prepare("SHOW TABLES LIKE ?")') === false &&
+    strpos($helperSource, "prepare('SHOW TABLES LIKE ?')") === false
+);
+assert_test("8.6: pepp_updates_column_exists does NOT prepare SHOW COLUMNS with placeholder (avoids MariaDB 1064 under native prepares)",
+    strpos($helperSource, 'LIKE ?")') === false &&
+    strpos($helperSource, "LIKE ?')") === false
+);
+assert_test("8.7: pepp_updates_table_exists uses information_schema as primary query for MySQL",
+    strpos($helperSource, 'information_schema.TABLES') !== false &&
+    strpos($helperSource, 'TABLE_SCHEMA = DATABASE()') !== false
+);
+
 echo "\n============================================================\n";
 echo "PHASE 2 AUDIT SUMMARY: {$totalPass} PASSED, {$totalFail} FAILED\n";
 echo "============================================================\n";

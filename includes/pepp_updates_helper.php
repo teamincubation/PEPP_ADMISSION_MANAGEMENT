@@ -50,9 +50,18 @@ function pepp_updates_table_exists(PDO $pdo, string $tableName): bool {
             $stmt->execute([$tableName]);
             return $cache[$tableName] = (bool)$stmt->fetchColumn();
         } else {
-            $stmt = $pdo->prepare("SHOW TABLES LIKE ?");
-            $stmt->execute([$tableName]);
-            return $cache[$tableName] = (bool)$stmt->fetchColumn();
+            $cleanTable = preg_replace('/[^a-zA-Z0-9_]/', '', $tableName);
+            if ($cleanTable === '') return $cache[$tableName] = false;
+            try {
+                $stmt = $pdo->prepare("SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? LIMIT 1");
+                $stmt->execute([$cleanTable]);
+                if ((bool)$stmt->fetchColumn()) {
+                    return $cache[$tableName] = true;
+                }
+            } catch (Throwable $eInfo) {
+                // Fallback to direct query if information_schema query fails
+            }
+            return $cache[$tableName] = (bool)$pdo->query("SHOW TABLES LIKE '{$cleanTable}'")->fetchColumn();
         }
     } catch (Throwable $e) {
         return $cache[$tableName] = false;
@@ -70,8 +79,9 @@ if (!function_exists('pepp_updates_column_exists')) {
         try {
             $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
             if ($driver === 'sqlite') {
-                $stmt = $pdo->query("PRAGMA table_info({$tableName})");
-                $cols = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                $cleanTable = preg_replace('/[^a-zA-Z0-9_]/', '', $tableName);
+                $stmt = $pdo->query("PRAGMA table_info({$cleanTable})");
+                $cols = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
                 foreach ($cols as $col) {
                     if (strcasecmp($col['name'] ?? '', $columnName) === 0) {
                         return $cache[$k] = true;
@@ -79,9 +89,19 @@ if (!function_exists('pepp_updates_column_exists')) {
                 }
                 return $cache[$k] = false;
             } else {
-                $stmt = $pdo->prepare("SHOW COLUMNS FROM `{$tableName}` LIKE ?");
-                $stmt->execute([$columnName]);
-                return $cache[$k] = (bool)$stmt->fetch();
+                $cleanTable = preg_replace('/[^a-zA-Z0-9_]/', '', $tableName);
+                $cleanCol = preg_replace('/[^a-zA-Z0-9_]/', '', $columnName);
+                if ($cleanTable === '' || $cleanCol === '') return $cache[$k] = false;
+                try {
+                    $stmt = $pdo->prepare("SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ? LIMIT 1");
+                    $stmt->execute([$cleanTable, $cleanCol]);
+                    if ((bool)$stmt->fetchColumn()) {
+                        return $cache[$k] = true;
+                    }
+                } catch (Throwable $eInfo) {
+                    // Fallback to direct query
+                }
+                return $cache[$k] = (bool)$pdo->query("SHOW COLUMNS FROM `{$cleanTable}` LIKE '{$cleanCol}'")->fetch();
             }
         } catch (Throwable $e) {
             return $cache[$k] = false;
