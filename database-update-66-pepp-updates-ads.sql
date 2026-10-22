@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS `updates_ads` (
   `image_url` VARCHAR(500) DEFAULT NULL COMMENT 'Banner or promotional graphic',
   `button_text` VARCHAR(100) NOT NULL DEFAULT 'Get More Info' COMMENT 'Submit CTA label',
   `target_all_posts` TINYINT(1) NOT NULL DEFAULT 1 COMMENT '1=All published updates, 0=Selected posts',
-  `popup_delay_seconds` INT NOT NULL DEFAULT 15 CHECK (`popup_delay_seconds` >= 1) COMMENT 'Active visible-page delay in seconds before popup triggers (1-600s)',
+  `popup_delay_seconds` INT NOT NULL DEFAULT 15 COMMENT 'Active visible-page delay in seconds before popup triggers (1-600s)',
   `auto_convert_crm` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '0=Manual review only, 1=Auto-convert to CRM lead (requires global setting ON)',
   `target_course_id` INT DEFAULT NULL COMMENT 'Canonical course mapping to pepp_courses.id',
   `status` ENUM('draft', 'active', 'paused', 'archived') NOT NULL DEFAULT 'draft',
@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS `updates_ads` (
   KEY `idx_ua_course` (`target_course_id`),
   KEY `idx_ua_display_order` (`display_order`),
   KEY `idx_ua_created_at` (`created_at`),
+  CONSTRAINT `chk_ua_popup_delay` CHECK (`popup_delay_seconds` >= 1),
   CONSTRAINT `fk_ua_course` FOREIGN KEY (`target_course_id`) REFERENCES `pepp_courses` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

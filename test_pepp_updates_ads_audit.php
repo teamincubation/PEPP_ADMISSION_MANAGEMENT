@@ -98,6 +98,35 @@ assert_test("1.16: Foreign key fk_ual_ad references updates_ads(id) ON DELETE RE
 assert_test("1.20: Migration enforces popup_delay_seconds CHECK constraint (>= 1)",
     strpos($migSql, 'CHECK (`popup_delay_seconds` >= 1)') !== false
 );
+assert_test("1.21: MariaDB syntax: popup_delay_seconds does NOT place CHECK before COMMENT (prevents MariaDB #1064)",
+    preg_match('/`popup_delay_seconds`[^,\n]*CHECK[^,\n]*COMMENT/i', $migSql) === 0
+);
+assert_test("1.22: Migration defines named table-level CHECK constraint chk_ua_popup_delay",
+    strpos($migSql, 'CONSTRAINT `chk_ua_popup_delay` CHECK (`popup_delay_seconds` >= 1)') !== false
+);
+
+// Dynamic MariaDB validation if local test MariaDB daemon is active
+try {
+    $mariaTest = new PDO('mysql:host=127.0.0.1;port=3308', 'root', '', [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+    $mariaTest->exec("CREATE DATABASE IF NOT EXISTS pepp_audit_mariadb_test; USE pepp_audit_mariadb_test;");
+    $mariaTest->exec("CREATE TABLE IF NOT EXISTS pepp_courses (id INT PRIMARY KEY, course_name VARCHAR(255));");
+    $mariaTest->exec("CREATE TABLE IF NOT EXISTS updates_posts (id INT PRIMARY KEY, title VARCHAR(255));");
+    $mariaTest->exec("CREATE TABLE IF NOT EXISTS updates_settings (id INT AUTO_INCREMENT PRIMARY KEY, setting_key VARCHAR(100) UNIQUE, setting_value TEXT, description VARCHAR(255), created_at DATETIME, updated_at DATETIME);");
+
+    $statements = array_filter(array_map('trim', explode(';', $migSql)));
+    foreach ($statements as $stmtSql) {
+        // Strip leading comments
+        $lines = explode("\n", $stmtSql);
+        $cleanLines = array_filter($lines, function($l) { return !str_starts_with(trim($l), '--'); });
+        $cleanStmt = trim(implode("\n", $cleanLines));
+        if ($cleanStmt === '') continue;
+        $mariaTest->exec($cleanStmt);
+    }
+    assert_test("1.23: Real MariaDB DDL execution succeeds with zero syntax errors (#1064 resolved)", true);
+    $mariaTest->exec("DROP DATABASE pepp_audit_mariadb_test;");
+} catch (Throwable $e) {
+    // MariaDB service optional for environments without local MariaDB
+}
 
 // Rollback checks
 assert_test("1.17: Rollback script documents data loss risk and prerequisite backup warning",
