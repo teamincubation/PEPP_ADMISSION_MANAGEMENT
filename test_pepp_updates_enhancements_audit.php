@@ -406,6 +406,108 @@ assert_test("Fix 3.12: pepp_public_get_related_posts normalizes em dash at displ
     strpos($relatedPosts[0]['short_description'], 'Related - Brief') !== false
 );
 
+// ============================================================
+// PHASE 1 ENHANCEMENT TESTS: Browser Tab Title & WhatsApp Section Toggle
+// ============================================================
+echo "\n--- PHASE 1: Browser Tab Title / SEO Em Dash Removal & WhatsApp Visibility ---\n";
+
+// Test Phase 1.1a: SEO render removes em dash from title, description, and social meta
+ob_start();
+pepp_seo_render([
+    'title' => "CUET PG \xE2\x80\x94 Exam & Admission Alerts &mdash; 2027",
+    'description' => "Stay updated on CUET PG \xE2\x80\x94 notifications and syllabus &#8212; verified.",
+    'url' => 'https://updates.pepplearning.in/post/cuet-pg'
+]);
+$sampleSeo = ob_get_clean();
+
+assert_test("Phase 1.1a: pepp_seo_render strips all forms of em dash in title and meta tags",
+    strpos($sampleSeo, "\xE2\x80\x94") === false &&
+    strpos($sampleSeo, "&mdash;") === false &&
+    strpos($sampleSeo, "&#8212;") === false &&
+    strpos($sampleSeo, "CUET PG - Exam &amp; Admission Alerts - 2027 | PEPP Updates") !== false &&
+    strpos($sampleSeo, "CUET PG - notifications and syllabus - verified.") !== false
+);
+
+// Test Phase 1.1b: Avoid double branding when title already contains PEPP Updates
+ob_start();
+pepp_seo_render([
+    'title' => "PEPP Updates \xE2\x80\x94 Career, Exam & Admission Notifications",
+    'description' => "PEPP Updates portal"
+]);
+$homeSeo = ob_get_clean();
+
+assert_test("Phase 1.1b: Avoid double branding suffix when site name is in title",
+    strpos($homeSeo, "PEPP Updates - Career, Exam &amp; Admission Notifications</title>") !== false &&
+    strpos($homeSeo, "PEPP Updates | PEPP Updates") === false
+);
+
+// Test Phase 1.1c: Robots.txt em dash removed
+$robotsTxt = file_get_contents(__DIR__ . '/public_updates/robots.txt');
+assert_test("Phase 1.1c: robots.txt contains standard hyphen and no em dash",
+    strpos($robotsTxt, "\xE2\x80\x94") === false &&
+    strpos($robotsTxt, '# PEPP Updates - robots.txt') !== false
+);
+
+// Test Phase 1.2: WhatsApp section visibility helper defaults to true (ON)
+$pubTestPdo->exec("DELETE FROM updates_settings WHERE setting_key = 'whatsapp_updates_section_enabled'");
+$waDefaultState = pepp_public_is_whatsapp_section_enabled($pubTestPdo);
+assert_test("Phase 1.2a: WhatsApp updates section defaults to ON (true) when setting row is absent",
+    $waDefaultState === true
+);
+
+// Test Phase 1.2b: WhatsApp section visibility helper returns false when setting is '0'
+$pubTestPdo->exec("INSERT OR REPLACE INTO updates_settings (setting_key, setting_value) VALUES ('whatsapp_updates_section_enabled', '0')");
+$waDisabledState = pepp_public_is_whatsapp_section_enabled($pubTestPdo);
+assert_test("Phase 1.2b: WhatsApp updates section returns false when setting is set to '0' (OFF)",
+    $waDisabledState === false
+);
+
+// Test Phase 1.2c: WhatsApp section visibility helper returns true when setting is '1'
+$pubTestPdo->exec("INSERT OR REPLACE INTO updates_settings (setting_key, setting_value) VALUES ('whatsapp_updates_section_enabled', '1')");
+$waEnabledState = pepp_public_is_whatsapp_section_enabled($pubTestPdo);
+assert_test("Phase 1.2c: WhatsApp updates section returns true when setting is set to '1' (ON)",
+    $waEnabledState === true
+);
+
+// Test Phase 1.2d: Subscribers and WhatsApp account configurations remain isolated and intact
+$pubTestPdo->exec("CREATE TABLE IF NOT EXISTS updates_subscribers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT,
+    phone TEXT,
+    status TEXT DEFAULT 'active'
+)");
+$pubTestPdo->exec("INSERT INTO updates_subscribers (name, phone, status) VALUES ('Test Student', '9876543210', 'active')");
+$subCountBefore = (int)$pubTestPdo->query("SELECT COUNT(*) FROM updates_subscribers")->fetchColumn();
+
+// Toggle setting to OFF and ON again
+$pubTestPdo->exec("UPDATE updates_settings SET setting_value = '0' WHERE setting_key = 'whatsapp_updates_section_enabled'");
+$offCheck = pepp_public_is_whatsapp_section_enabled($pubTestPdo);
+$pubTestPdo->exec("UPDATE updates_settings SET setting_value = '1' WHERE setting_key = 'whatsapp_updates_section_enabled'");
+$onCheck = pepp_public_is_whatsapp_section_enabled($pubTestPdo);
+$subCountAfter = (int)$pubTestPdo->query("SELECT COUNT(*) FROM updates_subscribers")->fetchColumn();
+
+assert_test("Phase 1.2d: Subscriber records and count remain preserved during WhatsApp visibility toggles",
+    $offCheck === false &&
+    $onCheck === true &&
+    $subCountBefore === 1 &&
+    $subCountAfter === 1
+);
+
+// Test Phase 1.2e: Verify public template files have the conditional gating
+$indexContent = file_get_contents(__DIR__ . '/public_updates/index.php');
+$headerContent = file_get_contents(__DIR__ . '/public_updates/includes/header.php');
+$footerContent = file_get_contents(__DIR__ . '/public_updates/includes/footer.php');
+$subscribeContent = file_get_contents(__DIR__ . '/public_updates/subscribe.php');
+$settingsContent = file_get_contents(__DIR__ . '/pepp-updates-settings.php');
+
+assert_test("Phase 1.2e: Public and admin template files contain proper whatsapp_updates_section_enabled gating",
+    strpos($indexContent, 'pepp_public_is_whatsapp_section_enabled($pdo)') !== false &&
+    strpos($headerContent, '$isWaEnabled') !== false &&
+    strpos($footerContent, 'pepp_public_is_whatsapp_section_enabled($pdo)') !== false &&
+    strpos($subscribeContent, '$isWaEnabled') !== false &&
+    strpos($settingsContent, 'whatsapp_updates_section_enabled') !== false
+);
+
 echo "\n============================================================\n";
 echo "ENHANCEMENTS AUDIT SUMMARY: {$totalPass} PASSED, {$totalFail} FAILED\n";
 echo "============================================================\n";

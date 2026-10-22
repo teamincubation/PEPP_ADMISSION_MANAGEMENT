@@ -22,6 +22,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_settings'])) {
         $flash_error = 'Invalid security token (CSRF).';
     } else {
         $duration_input = trim($_POST['new_label_duration_days'] ?? '');
+        $wa_section_input = trim($_POST['whatsapp_updates_section_enabled'] ?? '1');
+        $wa_section_val = ($wa_section_input === '0') ? '0' : '1';
 
         if (!ctype_digit($duration_input)) {
             $flash_error = 'NEW badge duration must be a valid whole integer.';
@@ -30,16 +32,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_settings'])) {
             if ($duration_val < 1 || $duration_val > 90) {
                 $flash_error = 'NEW badge duration must be between 1 and 90 days.';
             } else {
-                $saved = pepp_updates_set_setting(
+                $saved1 = pepp_updates_set_setting(
                     $pdo,
                     'new_label_duration_days',
                     $duration_val,
                     'Duration in days for an update to display the NEW badge',
                     $admin_username
                 );
+                $saved2 = pepp_updates_set_setting(
+                    $pdo,
+                    'whatsapp_updates_section_enabled',
+                    $wa_section_val,
+                    'Toggle visibility of public WhatsApp Updates subscription section (1=ON, 0=OFF)',
+                    $admin_username
+                );
 
-                if ($saved) {
-                    $flash_success = "Settings updated successfully. NEW badge duration set to {$duration_val} days.";
+                if ($saved1 && $saved2) {
+                    $wa_label = ($wa_section_val === '1') ? 'ON' : 'OFF';
+                    $flash_success = "Settings updated successfully. NEW badge duration: {$duration_val} days | WhatsApp Section: {$wa_label}.";
                 } else {
                     $flash_error = 'Failed to update settings in database.';
                 }
@@ -49,7 +59,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_settings'])) {
 }
 
 // Fetch current setting value
-$current_duration = (int)pepp_updates_get_setting($pdo, 'new_label_duration_days', 7);
+$current_duration   = (int)pepp_updates_get_setting($pdo, 'new_label_duration_days', 7);
+$current_wa_section = (string)pepp_updates_get_setting($pdo, 'whatsapp_updates_section_enabled', '1');
 
 // Fetch all settings records for display
 $all_settings = [];
@@ -100,6 +111,26 @@ include 'includes/admin_nav.php';
                         Specifies how many days after publication an update displays the vibrant <span class="badge violet" style="font-size: 0.65rem; padding: 2px 6px;">NEW</span> badge on admin and public portals.
                         <br>Sensible limits: 1 to 90 days. Default is 7 days.
                         <br><strong>Note:</strong> Expired updates will never display the NEW badge regardless of duration.
+                    </div>
+                </div>
+
+                <div class="field" style="margin-bottom: 24px; padding-top: 16px; border-top: 1px solid var(--border);">
+                    <label>Public "Get WhatsApp Updates" Subscription Section <span class="req">*</span></label>
+                    <div style="display: flex; gap: 20px; align-items: center; margin-top: 8px;">
+                        <label style="display: inline-flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer;">
+                            <input type="radio" name="whatsapp_updates_section_enabled" value="1" <?php echo ($current_wa_section !== '0') ? 'checked' : ''; ?>>
+                            <span class="badge green" style="font-size: 0.8rem; padding: 4px 10px;"><i class="fas fa-eye"></i> ON (Visible)</span>
+                        </label>
+                        <label style="display: inline-flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer;">
+                            <input type="radio" name="whatsapp_updates_section_enabled" value="0" <?php echo ($current_wa_section === '0') ? 'checked' : ''; ?>>
+                            <span class="badge red" style="font-size: 0.8rem; padding: 4px 10px;"><i class="fas fa-eye-slash"></i> OFF (Hidden)</span>
+                        </label>
+                    </div>
+                    <div class="help" style="margin-top: 8px;">
+                        Controls visibility of the "Get WhatsApp Updates" subscription section across the public portal (<code>updates.pepplearning.in</code>).
+                        <br>&bull; <strong>ON (Default):</strong> Shows homepage banner CTA, header navigation buttons, and footer subscription link.
+                        <br>&bull; <strong>OFF:</strong> Hides the section completely on all public pages and pauses new web opt-ins.
+                        <br><strong>Note:</strong> Toggling OFF does not delete subscribers or alter WhatsApp account credentials, templates, or broadcast routing.
                     </div>
                 </div>
 

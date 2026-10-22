@@ -40,7 +40,18 @@ function pepp_seo_render(array $seo = []): void {
     $defaultDesc = 'Official updates, entrance exam notifications, career alerts, admission updates, and academic notifications from PEPP Learning.';
     $defaultImg  = $baseUrl . '/assets/images/pepp-updates-og.png';
 
-    $title       = !empty($seo['title']) ? $seo['title'] . ' | ' . $siteName : $siteName . ' - Career, Exam & Admission Notifications';
+    $rawTitle    = !empty($seo['title']) ? trim((string)$seo['title']) : '';
+    if ($rawTitle !== '') {
+        if (stripos($rawTitle, $siteName) !== false) {
+            $title = $rawTitle;
+        } else {
+            $title = $rawTitle . ' | ' . $siteName;
+        }
+    } else {
+        $title = $siteName . ' - Career, Exam & Admission Notifications';
+    }
+    // Unconditionally sanitize any em dash variants to standard hyphen
+    $title = str_replace(["\xE2\x80\x94", '&mdash;', '&#8212;', '&#x2014;'], '-', $title);
     $description = !empty($seo['description']) ? pepp_seo_clean_text($seo['description'], 160) : $defaultDesc;
     $canonical   = !empty($seo['canonical']) ? $seo['canonical'] : $baseUrl . ($_SERVER['REQUEST_URI'] ?? '/');
     $ogType      = !empty($seo['og_type']) ? $seo['og_type'] : 'website';
@@ -51,6 +62,8 @@ function pepp_seo_render(array $seo = []): void {
         $ogImage = $baseUrl . '/' . ltrim($ogImage, '/');
     }
 
+    $ogTwitterTitle = str_replace(["\xE2\x80\x94", '&mdash;', '&#8212;', '&#x2014;'], '-', !empty($seo['title']) ? $seo['title'] : $title);
+
     echo "<!-- SEO & Social Meta Tags -->\n";
     echo "<title>" . htmlspecialchars($title) . "</title>\n";
     echo "<meta name=\"description\" content=\"" . htmlspecialchars($description) . "\">\n";
@@ -60,7 +73,7 @@ function pepp_seo_render(array $seo = []): void {
     echo "<!-- Open Graph (Facebook, WhatsApp, LinkedIn) -->\n";
     echo "<meta property=\"og:site_name\" content=\"" . htmlspecialchars($siteName) . "\">\n";
     echo "<meta property=\"og:type\" content=\"" . htmlspecialchars($ogType) . "\">\n";
-    echo "<meta property=\"og:title\" content=\"" . htmlspecialchars(!empty($seo['title']) ? $seo['title'] : $title) . "\">\n";
+    echo "<meta property=\"og:title\" content=\"" . htmlspecialchars($ogTwitterTitle) . "\">\n";
     echo "<meta property=\"og:description\" content=\"" . htmlspecialchars($description) . "\">\n";
     echo "<meta property=\"og:url\" content=\"" . htmlspecialchars($canonical) . "\">\n";
     echo "<meta property=\"og:image\" content=\"" . htmlspecialchars($ogImage) . "\">\n";
@@ -69,7 +82,7 @@ function pepp_seo_render(array $seo = []): void {
     echo "<!-- Twitter / X Card -->\n";
     echo "<meta name=\"twitter:card\" content=\"summary_large_image\">\n";
     echo "<meta name=\"twitter:site\" content=\"@pepplearning\">\n";
-    echo "<meta name=\"twitter:title\" content=\"" . htmlspecialchars(!empty($seo['title']) ? $seo['title'] : $title) . "\">\n";
+    echo "<meta name=\"twitter:title\" content=\"" . htmlspecialchars($ogTwitterTitle) . "\">\n";
     echo "<meta name=\"twitter:description\" content=\"" . htmlspecialchars($description) . "\">\n";
     echo "<meta name=\"twitter:image\" content=\"" . htmlspecialchars($ogImage) . "\">\n";
 

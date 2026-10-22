@@ -22,11 +22,17 @@ $formData = [
     'categories' => [],
 ];
 
+// Check if WhatsApp Updates subscription section is enabled
+$isWaEnabled = isset($pdo) ? pepp_public_is_whatsapp_section_enabled($pdo) : true;
+
 // Fetch active categories
 $categories = pepp_public_get_categories($pdo);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $name     = trim($_POST['name'] ?? '');
+    if (!$isWaEnabled) {
+        $errorMessage = 'WhatsApp updates subscription is currently paused. Please check back later.';
+    } else {
+        $name     = trim($_POST['name'] ?? '');
     $rawPhone = trim($_POST['phone'] ?? '');
     $catIds   = array_map('intval', $_POST['categories'] ?? []);
     $consent  = !empty($_POST['consent']);
@@ -155,6 +161,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 }
+}
 
 // SEO
 $pageSeo = [
@@ -196,6 +203,19 @@ require_once __DIR__ . '/includes/header.php';
                 <p style="font-size:0.9rem;"><?php echo htmlspecialchars($successMessage); ?></p>
                 <div style="margin-top:1.25rem;">
                     <a href="/" class="btn-article-action" style="padding:8px 20px;font-size:0.9rem;">Browse Latest Updates</a>
+                </div>
+            </div>
+        <?php elseif (!$isWaEnabled): ?>
+            <div style="background:#f8fafc;border:1px solid #e2e8f0;color:#334155;padding:2.5rem 1.5rem;border-radius:var(--radius);margin-bottom:2rem;text-align:center;">
+                <div style="width:52px;height:52px;background:#e0f2fe;color:#0284c7;border-radius:var(--radius-full);display:inline-flex;align-items:center;justify-content:center;margin-bottom:1rem;">
+                    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                </div>
+                <h3 style="font-size:1.2rem;font-weight:800;color:var(--foreground);margin-bottom:0.5rem;">Subscription Paused</h3>
+                <p style="font-size:0.92rem;color:var(--secondary);max-width:460px;margin:0 auto 1.5rem auto;line-height:1.5;">
+                    WhatsApp updates subscription is temporarily paused by the administrator. You can still explore all latest career alerts and admission announcements directly on our portal.
+                </p>
+                <div>
+                    <a href="/" class="btn-article-action" style="padding:10px 24px;font-size:0.92rem;">Explore Latest Updates</a>
                 </div>
             </div>
         <?php else: ?>

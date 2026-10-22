@@ -208,6 +208,7 @@ require_once __DIR__ . '/includes/header.php';
 </section>
 
 <!-- WhatsApp Subscription CTA Banner -->
+<?php if (isset($pdo) ? pepp_public_is_whatsapp_section_enabled($pdo) : true): ?>
 <section class="container">
     <div class="whatsapp-cta-banner">
         <div class="whatsapp-cta-content">
@@ -220,6 +221,7 @@ require_once __DIR__ . '/includes/header.php';
         </a>
     </div>
 </section>
+<?php endif; ?>
 
 <!-- Explore Categories Section -->
 <?php if (!empty($categories)): ?>

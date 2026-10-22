@@ -23,7 +23,9 @@ if (!defined('PEPP_PUBLIC_UPDATES_PORTAL')) {
                         <li><a href="/">Home</a></li>
                         <li><a href="/categories">All Categories</a></li>
                         <li><a href="/search">Search Updates</a></li>
-                        <li><a href="/subscribe">Get WhatsApp Updates</a></li>
+                        <?php if (isset($pdo) ? pepp_public_is_whatsapp_section_enabled($pdo) : true): ?>
+                            <li><a href="/subscribe">Get WhatsApp Updates</a></li>
+                        <?php endif; ?>
                     </ul>
                 </div>
 

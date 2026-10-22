@@ -25,6 +25,15 @@ function pepp_public_get_setting(PDO $pdo, string $key, $default = null) {
     }
 }
 
+/**
+ * Checks whether the public WhatsApp updates subscription section is enabled.
+ * Defaults to true (1) to preserve existing behavior.
+ */
+function pepp_public_is_whatsapp_section_enabled(PDO $pdo): bool {
+    $val = pepp_public_get_setting($pdo, 'whatsapp_updates_section_enabled', '1');
+    return (string)$val !== '0';
+}
+
 if (!function_exists('pepp_updates_column_exists')) {
     function pepp_updates_column_exists(PDO $pdo, string $table, string $column): bool {
         try {
