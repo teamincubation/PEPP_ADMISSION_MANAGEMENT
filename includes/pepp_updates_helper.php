@@ -166,6 +166,7 @@ function pepp_updates_stats(PDO $pdo): array {
 
 /**
  * Retrieves a PEPP Updates setting from updates_settings table.
+ * Supports canonical key precedence with safe compatibility aliases.
  */
 function pepp_updates_get_setting(PDO $pdo, string $key, $default = null) {
     if (!pepp_updates_tables_exist($pdo)) return $default;
@@ -173,7 +174,26 @@ function pepp_updates_get_setting(PDO $pdo, string $key, $default = null) {
         $stmt = $pdo->prepare("SELECT setting_value FROM updates_settings WHERE setting_key = ? LIMIT 1");
         $stmt->execute([$key]);
         $val = $stmt->fetchColumn();
-        return ($val !== false && $val !== null) ? $val : $default;
+        if ($val !== false && $val !== null) {
+            return $val;
+        }
+
+        // Safe alias fallback: if canonical key not found in DB, check legacy alias
+        if ($key === 'ad_leads_auto_convert_enabled') {
+            $stmt->execute(['ad_lead_auto_convert_global']);
+            $aliasVal = $stmt->fetchColumn();
+            if ($aliasVal !== false && $aliasVal !== null) {
+                return $aliasVal;
+            }
+        } elseif ($key === 'ad_lead_auto_convert_global') {
+            $stmt->execute(['ad_leads_auto_convert_enabled']);
+            $canonicalVal = $stmt->fetchColumn();
+            if ($canonicalVal !== false && $canonicalVal !== null) {
+                return $canonicalVal;
+            }
+        }
+
+        return $default;
     } catch (Throwable $e) {
         return $default;
     }
@@ -616,5 +636,471 @@ function pepp_updates_record_subscriber_event(PDO $pdo, int $subscriberId, strin
     } catch (Throwable $e) {
         error_log('pepp_updates_record_subscriber_event error: ' . $e->getMessage());
         return false;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+// AD MANAGEMENT & LEAD CAPTURE HELPERS (Phase 2 Foundation)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Retrieves active courses from pepp_courses for canonical course mapping.
+ */
+function pepp_updates_get_courses(PDO $pdo): array {
+    try {
+        $stmt = $pdo->query("SELECT id, course_name, course_code FROM pepp_courses WHERE status = 'active' ORDER BY course_name ASC");
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {
+        return [];
+    }
+}
+
+/**
+ * Retrieves published posts for ad targeting selection.
+ */
+function pepp_updates_get_published_posts(PDO $pdo): array {
+    try {
+        $stmt = $pdo->query("SELECT id, title, slug FROM updates_posts WHERE status = 'published' ORDER BY title ASC");
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {
+        return [];
+    }
+}
+
+/**
+ * Evaluates whether automatic conversion to CRM leads is permitted.
+ * Precedence Rule:
+ * 1. Global setting `ad_leads_auto_convert_enabled` MUST be '1'.
+ * 2. Per-ad setting `auto_convert_crm` MUST be 1.
+ * 3. Returns TRUE only when BOTH conditions are met. Otherwise FALSE.
+ */
+function pepp_updates_is_auto_convert_allowed(PDO $pdo, ?array $ad = null): bool {
+    $globalSetting = (string)pepp_updates_get_setting($pdo, 'ad_leads_auto_convert_enabled', '0');
+    if ($globalSetting !== '1') {
+        return false;
+    }
+    if ($ad !== null) {
+        return ((int)($ad['auto_convert_crm'] ?? 0)) === 1;
+    }
+    return true;
+}
+
+/**
+ * Retrieves all ads with optional filtering.
+ */
+function pepp_updates_get_ads(PDO $pdo, array $filters = []): array {
+    if (!pepp_updates_table_exists($pdo, 'updates_ads')) {
+        return [];
+    }
+
+    try {
+        $where = ['1=1'];
+        $params = [];
+
+        if (!empty($filters['search'])) {
+            $where[] = '(a.title LIKE ? OR a.headline LIKE ?)';
+            $searchParam = '%' . trim($filters['search']) . '%';
+            $params[] = $searchParam;
+            $params[] = $searchParam;
+        }
+
+        if (!empty($filters['status']) && in_array($filters['status'], ['draft', 'active', 'paused', 'archived'], true)) {
+            $where[] = 'a.status = ?';
+            $params[] = $filters['status'];
+        }
+
+        $whereSql = implode(' AND ', $where);
+
+        $sql = "
+            SELECT
+                a.*,
+                pc.course_name AS mapped_course_name,
+                (SELECT COUNT(*) FROM updates_ad_leads al WHERE al.ad_id = a.id) AS total_leads_count,
+                (SELECT COUNT(*) FROM updates_ad_leads al WHERE al.ad_id = a.id AND al.status = 'converted') AS converted_leads_count,
+                (SELECT COUNT(*) FROM updates_ad_posts ap WHERE ap.ad_id = a.id) AS targeted_posts_count
+            FROM updates_ads a
+            LEFT JOIN pepp_courses pc ON a.target_course_id = pc.id
+            WHERE {$whereSql}
+            ORDER BY a.display_order ASC, a.created_at DESC
+        ";
+
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {
+        error_log('pepp_updates_get_ads error: ' . $e->getMessage());
+        return [];
+    }
+}
+
+/**
+ * Retrieves a single ad by ID with its linked post IDs and custom fields.
+ */
+function pepp_updates_get_ad(PDO $pdo, int $adId): ?array {
+    if (!pepp_updates_table_exists($pdo, 'updates_ads')) {
+        return null;
+    }
+
+    try {
+        $stmt = $pdo->prepare("
+            SELECT a.*, pc.course_name AS mapped_course_name
+            FROM updates_ads a
+            LEFT JOIN pepp_courses pc ON a.target_course_id = pc.id
+            WHERE a.id = ?
+            LIMIT 1
+        ");
+        $stmt->execute([$adId]);
+        $ad = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$ad) {
+            return null;
+        }
+
+        // Linked posts
+        $stmtPosts = $pdo->prepare("SELECT post_id FROM updates_ad_posts WHERE ad_id = ?");
+        $stmtPosts->execute([$adId]);
+        $ad['target_post_ids'] = $stmtPosts->fetchAll(PDO::FETCH_COLUMN);
+
+        // Ordered custom fields
+        $stmtFields = $pdo->prepare("SELECT * FROM updates_ad_fields WHERE ad_id = ? ORDER BY sort_order ASC, id ASC");
+        $stmtFields->execute([$adId]);
+        $ad['fields'] = $stmtFields->fetchAll(PDO::FETCH_ASSOC);
+
+        return $ad;
+    } catch (Throwable $e) {
+        error_log('pepp_updates_get_ad error: ' . $e->getMessage());
+        return null;
+    }
+}
+
+/**
+ * Creates or updates an ad transactionally.
+ */
+function pepp_updates_save_ad(PDO $pdo, array $adData, array $postIds = [], array $fields = [], ?string $adminUser = null): array {
+    if (!pepp_updates_table_exists($pdo, 'updates_ads')) {
+        return ['success' => false, 'error' => 'Ad tables have not been created yet.'];
+    }
+
+    $id = !empty($adData['id']) ? (int)$adData['id'] : null;
+    $title = trim($adData['title'] ?? '');
+    $headline = trim($adData['headline'] ?? '');
+    $subheadline = trim($adData['subheadline'] ?? '');
+    $imageUrl = trim($adData['image_url'] ?? '');
+    $buttonText = trim($adData['button_text'] ?? 'Get More Info');
+    $targetAllPosts = !empty($adData['target_all_posts']) ? 1 : 0;
+    $popupDelaySeconds = max(1, min(600, (int)($adData['popup_delay_seconds'] ?? 15)));
+    $autoConvertCrm = !empty($adData['auto_convert_crm']) ? 1 : 0;
+    $targetCourseId = !empty($adData['target_course_id']) ? (int)$adData['target_course_id'] : null;
+    $statusRaw = $adData['status'] ?? 'draft';
+    $status = in_array($statusRaw, ['draft', 'active', 'paused', 'archived'], true) ? $statusRaw : 'draft';
+    $displayOrder = (int)($adData['display_order'] ?? 0);
+    $slugCandidate = trim($adData['slug'] ?? '');
+    if ($slugCandidate === '') {
+        $slugCandidate = $title;
+    }
+
+    if ($title === '') {
+        return ['success' => false, 'error' => 'Ad title is required.'];
+    }
+
+    $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+    $nowSql = ($driver === 'sqlite') ? "datetime('now')" : "NOW()";
+
+    $pdo->beginTransaction();
+    try {
+        $slug = pepp_updates_generate_slug($pdo, 'updates_ads', $slugCandidate, $id);
+
+        if ($id) {
+            // Update
+            $stmt = $pdo->prepare("
+                UPDATE updates_ads SET
+                    title = ?,
+                    slug = ?,
+                    headline = ?,
+                    subheadline = ?,
+                    image_url = ?,
+                    button_text = ?,
+                    target_all_posts = ?,
+                    popup_delay_seconds = ?,
+                    auto_convert_crm = ?,
+                    target_course_id = ?,
+                    status = ?,
+                    display_order = ?,
+                    updated_by = ?,
+                    updated_at = {$nowSql}
+                WHERE id = ?
+            ");
+            $stmt->execute([
+                $title, $slug, $headline, $subheadline, $imageUrl, $buttonText,
+                $targetAllPosts, $popupDelaySeconds, $autoConvertCrm, $targetCourseId,
+                $status, $displayOrder, $adminUser, $id
+            ]);
+            $adId = $id;
+        } else {
+            // Insert
+            $stmt = $pdo->prepare("
+                INSERT INTO updates_ads (
+                    title, slug, headline, subheadline, image_url, button_text,
+                    target_all_posts, popup_delay_seconds, auto_convert_crm,
+                    target_course_id, status, display_order, created_by, updated_by,
+                    created_at, updated_at
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?,
+                    ?, ?, ?, ?, ?,
+                    {$nowSql}, {$nowSql}
+                )
+            ");
+            $stmt->execute([
+                $title, $slug, $headline, $subheadline, $imageUrl, $buttonText,
+                $targetAllPosts, $popupDelaySeconds, $autoConvertCrm,
+                $targetCourseId, $status, $displayOrder, $adminUser, $adminUser
+            ]);
+            $adId = (int)$pdo->lastInsertId();
+        }
+
+        // Synchronize target posts
+        $pdo->prepare("DELETE FROM updates_ad_posts WHERE ad_id = ?")->execute([$adId]);
+        if (!$targetAllPosts && !empty($postIds)) {
+            $stmtInsertPost = $pdo->prepare("INSERT INTO updates_ad_posts (ad_id, post_id, created_at) VALUES (?, ?, {$nowSql})");
+            foreach ($postIds as $pId) {
+                $pId = (int)$pId;
+                if ($pId > 0) {
+                    $stmtInsertPost->execute([$adId, $pId]);
+                }
+            }
+        }
+
+        // Synchronize custom fields
+        $pdo->prepare("DELETE FROM updates_ad_fields WHERE ad_id = ?")->execute([$adId]);
+        if (!empty($fields)) {
+            $stmtInsertField = $pdo->prepare("
+                INSERT INTO updates_ad_fields (
+                    ad_id, field_name, field_label, field_type, is_required,
+                    field_options, sort_order, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, {$nowSql}, {$nowSql})
+            ");
+            $sortIndex = 0;
+            $usedFieldNames = [];
+            foreach ($fields as $field) {
+                $fLabel = trim($field['field_label'] ?? '');
+                $rawCandidate = trim($field['field_name'] ?? '');
+                $fName = strtolower(trim(preg_replace('/[^a-zA-Z0-9_]/', '_', $rawCandidate)));
+                if ($fName === '') {
+                    $fName = strtolower(trim(preg_replace('/[^a-zA-Z0-9_]/', '_', $fLabel)));
+                }
+                $fName = trim(preg_replace('/_+/', '_', $fName), '_');
+                if ($fLabel === '' || $fName === '') {
+                    continue;
+                }
+
+                // Deterministic collision handling (e.g. college_name, college_name_2, college_name_3)
+                $baseName = $fName;
+                $counter = 2;
+                while (isset($usedFieldNames[$fName])) {
+                    $fName = $baseName . '_' . $counter;
+                    $counter++;
+                }
+                $usedFieldNames[$fName] = true;
+
+                $fTypeRaw = $field['field_type'] ?? 'text';
+                $fType = in_array($fTypeRaw, ['text', 'tel', 'email', 'select', 'textarea'], true) ? $fTypeRaw : 'text';
+                $fRequired = !empty($field['is_required']) ? 1 : 0;
+                $fOptions = trim($field['field_options'] ?? '');
+                $fSort = isset($field['sort_order']) ? (int)$field['sort_order'] : $sortIndex;
+
+                $stmtInsertField->execute([
+                    $adId, $fName, $fLabel, $fType, $fRequired, $fOptions, $fSort
+                ]);
+                $sortIndex++;
+            }
+        }
+
+        $pdo->commit();
+        return ['success' => true, 'id' => $adId, 'slug' => $slug];
+    } catch (Throwable $e) {
+        $pdo->rollBack();
+        error_log('pepp_updates_save_ad error: ' . $e->getMessage());
+        return ['success' => false, 'error' => 'Database error saving ad: ' . $e->getMessage()];
+    }
+}
+
+/**
+ * Transitions an ad's status (active, paused, archived, draft).
+ */
+function pepp_updates_toggle_ad_status(PDO $pdo, int $adId, string $newStatus, ?string $adminUser = null): bool {
+    if (!pepp_updates_table_exists($pdo, 'updates_ads')) {
+        return false;
+    }
+    if (!in_array($newStatus, ['draft', 'active', 'paused', 'archived'], true)) {
+        return false;
+    }
+
+    try {
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        $nowSql = ($driver === 'sqlite') ? "datetime('now')" : "NOW()";
+
+        $stmt = $pdo->prepare("UPDATE updates_ads SET status = ?, updated_by = ?, updated_at = {$nowSql} WHERE id = ?");
+        return $stmt->execute([$newStatus, $adminUser, $adId]);
+    } catch (Throwable $e) {
+        error_log('pepp_updates_toggle_ad_status error: ' . $e->getMessage());
+        return false;
+    }
+}
+
+/**
+ * Deletes an ad safely. Prevents deletion if leads exist.
+ */
+function pepp_updates_delete_ad(PDO $pdo, int $adId): array {
+    if (!pepp_updates_table_exists($pdo, 'updates_ads')) {
+        return ['success' => false, 'error' => 'Ad table not found.'];
+    }
+
+    try {
+        // Pre-check lead count
+        if (pepp_updates_table_exists($pdo, 'updates_ad_leads')) {
+            $stmtCount = $pdo->prepare("SELECT COUNT(*) FROM updates_ad_leads WHERE ad_id = ?");
+            $stmtCount->execute([$adId]);
+            $leadCount = (int)$stmtCount->fetchColumn();
+
+            if ($leadCount > 0) {
+                return [
+                    'success' => false,
+                    'error'   => "Cannot delete ad: it contains {$leadCount} captured lead(s). Archive the ad instead to preserve lead records and audit history."
+                ];
+            }
+        }
+
+        $stmt = $pdo->prepare("DELETE FROM updates_ads WHERE id = ?");
+        $stmt->execute([$adId]);
+        return ['success' => true];
+    } catch (Throwable $e) {
+        error_log('pepp_updates_delete_ad error: ' . $e->getMessage());
+        return ['success' => false, 'error' => 'Database error deleting ad: ' . $e->getMessage()];
+    }
+}
+
+/**
+ * Retrieves summary metrics for captured Ad Leads.
+ */
+function pepp_updates_get_ad_lead_stats(PDO $pdo): array {
+    $stats = [
+        'total'     => 0,
+        'new'       => 0,
+        'converted' => 0,
+        'failed'    => 0,
+        'blocked'   => 0
+    ];
+
+    if (!pepp_updates_table_exists($pdo, 'updates_ad_leads')) {
+        return $stats;
+    }
+
+    try {
+        $stmt = $pdo->query("
+            SELECT status, COUNT(*) AS cnt
+            FROM updates_ad_leads
+            GROUP BY status
+        ");
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as $r) {
+            $st = $r['status'] ?? '';
+            $cnt = (int)($r['cnt'] ?? 0);
+            $stats['total'] += $cnt;
+            if (isset($stats[$st])) {
+                $stats[$st] = $cnt;
+            }
+        }
+    } catch (Throwable $e) {
+        error_log('pepp_updates_get_ad_lead_stats error: ' . $e->getMessage());
+    }
+
+    return $stats;
+}
+
+/**
+ * Retrieves paginated Ad Leads with joined entity titles.
+ */
+function pepp_updates_get_ad_leads(PDO $pdo, array $filters = [], int $page = 1, int $limit = 25): array {
+    if (!pepp_updates_table_exists($pdo, 'updates_ad_leads')) {
+        return ['leads' => [], 'total' => 0, 'pages' => 0];
+    }
+
+    try {
+        $where = ['1=1'];
+        $params = [];
+
+        if (!empty($filters['search'])) {
+            $where[] = '(al.name LIKE ? OR al.phone LIKE ? OR a.title LIKE ?)';
+            $searchParam = '%' . trim($filters['search']) . '%';
+            $params[] = $searchParam;
+            $params[] = $searchParam;
+            $params[] = $searchParam;
+        }
+
+        if (!empty($filters['ad_id'])) {
+            $where[] = 'al.ad_id = ?';
+            $params[] = (int)$filters['ad_id'];
+        }
+
+        if (!empty($filters['status']) && in_array($filters['status'], ['new', 'converted', 'failed', 'blocked'], true)) {
+            $where[] = 'al.status = ?';
+            $params[] = $filters['status'];
+        }
+
+        if (!empty($filters['date_from'])) {
+            $where[] = 'al.created_at >= ?';
+            $params[] = $filters['date_from'] . ' 00:00:00';
+        }
+
+        if (!empty($filters['date_to'])) {
+            $where[] = 'al.created_at <= ?';
+            $params[] = $filters['date_to'] . ' 23:59:59';
+        }
+
+        $whereSql = implode(' AND ', $where);
+
+        // Count total
+        $countStmt = $pdo->prepare("
+            SELECT COUNT(*)
+            FROM updates_ad_leads al
+            LEFT JOIN updates_ads a ON al.ad_id = a.id
+            WHERE {$whereSql}
+        ");
+        $countStmt->execute($params);
+        $total = (int)$countStmt->fetchColumn();
+
+        $pages = $limit > 0 ? (int)ceil($total / $limit) : 0;
+        $offset = max(0, ($page - 1) * $limit);
+
+        $sql = "
+            SELECT
+                al.*,
+                a.title AS ad_title,
+                p.title AS post_title,
+                p.slug AS post_slug,
+                pc.course_name AS mapped_course_name
+            FROM updates_ad_leads al
+            LEFT JOIN updates_ads a ON al.ad_id = a.id
+            LEFT JOIN updates_posts p ON al.post_id = p.id
+            LEFT JOIN pepp_courses pc ON al.course_id = pc.id
+            WHERE {$whereSql}
+            ORDER BY al.created_at DESC
+            LIMIT {$limit} OFFSET {$offset}
+        ";
+
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        $leads = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        return [
+            'leads' => $leads,
+            'total' => $total,
+            'pages' => $pages,
+            'page'  => $page
+        ];
+    } catch (Throwable $e) {
+        error_log('pepp_updates_get_ad_leads error: ' . $e->getMessage());
+        return ['leads' => [], 'total' => 0, 'pages' => 0];
     }
 }

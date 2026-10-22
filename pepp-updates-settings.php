@@ -24,6 +24,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_settings'])) {
         $duration_input = trim($_POST['new_label_duration_days'] ?? '');
         $wa_section_input = trim($_POST['whatsapp_updates_section_enabled'] ?? '1');
         $wa_section_val = ($wa_section_input === '0') ? '0' : '1';
+        $auto_convert_input = trim($_POST['ad_leads_auto_convert_enabled'] ?? '0');
+        $auto_convert_val = ($auto_convert_input === '1') ? '1' : '0';
 
         if (!ctype_digit($duration_input)) {
             $flash_error = 'NEW badge duration must be a valid whole integer.';
@@ -46,10 +48,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_settings'])) {
                     'Toggle visibility of public WhatsApp Updates subscription section (1=ON, 0=OFF)',
                     $admin_username
                 );
+                $saved3 = pepp_updates_set_setting(
+                    $pdo,
+                    'ad_leads_auto_convert_enabled',
+                    $auto_convert_val,
+                    'Global toggle for auto-converting Ad Leads into CRM Leads (0=OFF, 1=ON)',
+                    $admin_username
+                );
 
-                if ($saved1 && $saved2) {
+                if ($saved1 && $saved2 && $saved3) {
                     $wa_label = ($wa_section_val === '1') ? 'ON' : 'OFF';
-                    $flash_success = "Settings updated successfully. NEW badge duration: {$duration_val} days | WhatsApp Section: {$wa_label}.";
+                    $ac_label = ($auto_convert_val === '1') ? 'ON' : 'OFF';
+                    $flash_success = "Settings updated successfully. NEW badge: {$duration_val} days | WhatsApp Section: {$wa_label} | Global Auto-Convert: {$ac_label}.";
                 } else {
                     $flash_error = 'Failed to update settings in database.';
                 }
@@ -59,8 +69,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_settings'])) {
 }
 
 // Fetch current setting value
-$current_duration   = (int)pepp_updates_get_setting($pdo, 'new_label_duration_days', 7);
-$current_wa_section = (string)pepp_updates_get_setting($pdo, 'whatsapp_updates_section_enabled', '1');
+$current_duration     = (int)pepp_updates_get_setting($pdo, 'new_label_duration_days', 7);
+$current_wa_section   = (string)pepp_updates_get_setting($pdo, 'whatsapp_updates_section_enabled', '1');
+$current_auto_convert = (string)pepp_updates_get_setting($pdo, 'ad_leads_auto_convert_enabled', '0');
 
 // Fetch all settings records for display
 $all_settings = [];
@@ -131,6 +142,28 @@ include 'includes/admin_nav.php';
                         <br>&bull; <strong>ON (Default):</strong> Shows homepage banner CTA, header navigation buttons, and footer subscription link.
                         <br>&bull; <strong>OFF:</strong> Hides the section completely on all public pages and pauses new web opt-ins.
                         <br><strong>Note:</strong> Toggling OFF does not delete subscribers or alter WhatsApp account credentials, templates, or broadcast routing.
+                    </div>
+                </div>
+
+                <!-- 3. Global Ad Leads Auto-Convert Toggle -->
+                <div class="form-group" style="margin-bottom: 22px;">
+                    <label style="font-weight: 700; display: block; margin-bottom: 6px;">
+                        <i class="fas fa-robot"></i> Automatic CRM Lead Conversion (Global Master Toggle)
+                    </label>
+                    <div style="display: flex; gap: 20px; align-items: center; margin-top: 6px;">
+                        <label style="display: inline-flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer;">
+                            <input type="radio" name="ad_leads_auto_convert_enabled" value="0" <?php echo ($current_auto_convert !== '1') ? 'checked' : ''; ?>>
+                            <span class="badge gray" style="font-size: 0.8rem; padding: 4px 10px;"><i class="fas fa-hand"></i> OFF / Manual Review Only (Default)</span>
+                        </label>
+                        <label style="display: inline-flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer;">
+                            <input type="radio" name="ad_leads_auto_convert_enabled" value="1" <?php echo ($current_auto_convert === '1') ? 'checked' : ''; ?>>
+                            <span class="badge green" style="font-size: 0.8rem; padding: 4px 10px;"><i class="fas fa-bolt"></i> ON (Auto-Convert Enabled)</span>
+                        </label>
+                    </div>
+                    <div class="help" style="margin-top: 8px;">
+                        Global safety master switch for automatically converting submitted popup ad leads into ERP CRM leads.
+                        <br>&bull; <strong>Strict Precedence:</strong> Automatic conversion is allowed <em>only</em> when both this Global setting <strong>AND</strong> the specific Ad's auto-convert setting are <strong>ON</strong>.
+                        <br>&bull; <strong>Default is OFF:</strong> Leads are stored as 'new' in <a href="pepp-updates-ad-leads.php" style="color:var(--primary);font-weight:600;">Ad Leads</a> for administrative review and manual conversion.
                     </div>
                 </div>
 

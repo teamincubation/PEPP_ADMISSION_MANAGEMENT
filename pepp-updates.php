@@ -80,6 +80,12 @@ include 'includes/admin_nav.php';
         <a href="pepp-updates-campaigns.php" class="btn btn-outline">
             <i class="fas fa-paper-plane"></i> Delivery Campaigns
         </a>
+        <a href="pepp-updates-ads.php" class="btn btn-outline">
+            <i class="fas fa-rectangle-ad"></i> Popup Ads
+        </a>
+        <a href="pepp-updates-ad-leads.php" class="btn btn-outline">
+            <i class="fas fa-bullhorn"></i> Ad Leads
+        </a>
     </div>
     <div>
         <a href="pepp-updates-settings.php" class="btn btn-outline" title="Module Settings">

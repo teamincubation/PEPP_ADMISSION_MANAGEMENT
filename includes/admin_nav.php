@@ -578,6 +578,12 @@ function render_nav_item($key, $active_page, $nav_data) {
         case 'pepp-updates-campaigns':
             echo '<a class="nav-item ' . nav_active('pepp-updates-campaigns', $active_page) . '" href="pepp-updates-campaigns.php"><i class="fas fa-paper-plane"></i> Delivery Campaigns</a>';
             break;
+        case 'pepp-updates-ads':
+            echo '<a class="nav-item ' . nav_active('pepp-updates-ads', $active_page) . '" href="pepp-updates-ads.php"><i class="fas fa-rectangle-ad"></i> Popup Ads</a>';
+            break;
+        case 'pepp-updates-ad-leads':
+            echo '<a class="nav-item ' . nav_active('pepp-updates-ad-leads', $active_page) . '" href="pepp-updates-ad-leads.php"><i class="fas fa-bullhorn"></i> Ad Leads</a>';
+            break;
         case 'pepp-updates-settings':
             echo '<a class="nav-item ' . nav_active('pepp-updates-settings', $active_page) . '" href="pepp-updates-settings.php"><i class="fas fa-sliders"></i> Settings</a>';
             break;
@@ -596,7 +602,7 @@ $default_sidebar = [
         'id' => 'pepp-updates',
         'title' => 'PEPP Updates',
         'icon' => 'fas fa-newspaper',
-        'items' => ['pepp-updates', 'pepp-updates-posts', 'pepp-updates-categories', 'pepp-updates-keywords', 'pepp-updates-subscribers', 'pepp-updates-campaigns', 'pepp-updates-settings']
+        'items' => ['pepp-updates', 'pepp-updates-posts', 'pepp-updates-categories', 'pepp-updates-keywords', 'pepp-updates-subscribers', 'pepp-updates-ads', 'pepp-updates-ad-leads', 'pepp-updates-campaigns', 'pepp-updates-settings']
     ],
     [
         'id' => 'registrations',

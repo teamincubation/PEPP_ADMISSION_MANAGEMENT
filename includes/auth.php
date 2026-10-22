@@ -90,6 +90,8 @@ $GLOBALS['ADMIN_PAGES'] = [
     'pepp-updates-keywords'    => ['PEPP Updates Keywords',    'fa-tags'],
     'pepp-updates-subscribers' => ['PEPP Updates Subscribers', 'fa-users-viewfinder'],
     'pepp-updates-campaigns'   => ['PEPP Updates Campaigns',   'fa-paper-plane'],
+    'pepp-updates-ads'         => ['PEPP Updates Ads',         'fa-rectangle-ad'],
+    'pepp-updates-ad-leads'    => ['PEPP Updates Ad Leads',    'fa-bullhorn'],
     'pepp-updates-settings'    => ['PEPP Updates Settings',    'fa-sliders'],
 ];
 
