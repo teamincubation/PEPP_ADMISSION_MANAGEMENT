@@ -204,6 +204,31 @@ if (!file_exists(__DIR__ . '/config/database.php')) {
             }
             echo "\n";
 
+            // Audit Migration 66 (PEPP Updates Ads Phase 2)
+            echo "Migration 66 (PEPP Updates Ads Phase 2):\n";
+            require_once __DIR__ . '/includes/pepp_updates_helper.php';
+            $adTables = ['updates_ads', 'updates_ad_posts', 'updates_ad_fields', 'updates_ad_leads'];
+            $allAdsTablesOk = true;
+            foreach ($adTables as $at) {
+                $exists = pepp_updates_table_exists($pdo, $at);
+                echo "  - Table `$at` (via pepp_updates_table_exists): " . ($exists ? "PRESENT" : "MISSING") . "\n";
+                if (!$exists) $allAdsTablesOk = false;
+            }
+            if ($allAdsTablesOk) {
+                echo "  - Status: FULLY EXECUTED\n";
+                try {
+                    $ads = pepp_updates_get_ads($pdo);
+                    echo "  - pepp_updates_get_ads() execution: SUCCESS (Count: " . count($ads) . ")\n";
+                    $leadStats = pepp_updates_get_ad_lead_stats($pdo);
+                    echo "  - pepp_updates_get_ad_lead_stats() execution: SUCCESS (Total: " . $leadStats['total'] . ")\n";
+                } catch (Throwable $e) {
+                    echo "  - Helper execution ERROR: " . $e->getMessage() . "\n";
+                }
+            } else {
+                echo "  - Status: PARTIALLY EXECUTED / NOT EXECUTED\n";
+            }
+            echo "\n";
+
             // Audit Legacy Assessment Batches for Cross-Course Contamination
             echo "LEGACY ASSESSMENT DATA INTEGRITY AUDIT (CROSS-COURSE CONTAMINATION)\n";
             echo "------------------------------------------------------------------\n";
